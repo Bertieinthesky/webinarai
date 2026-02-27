@@ -27,7 +27,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { EmbedPlayer } from "@/components/player/EmbedPlayer";
+import { SmartSyncPlayer } from "@/components/player/SmartSyncPlayer";
 
 interface EmbedData {
   projectId: string;
@@ -168,7 +168,7 @@ export default function EmbedPage() {
       }}
     >
       <div style={{ width: "100%", maxWidth: 1280 }}>
-        <EmbedPlayer
+        <SmartSyncPlayer
           hookClipUrl={hookBlobUrl || data.hookClipUrl}
           fullVideoUrl={data.fullVideoUrl}
           hookEndTimeMs={data.hookEndTimeMs}

@@ -22,6 +22,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { EmbedPlayer } from "@/components/player/EmbedPlayer";
+import { SmartSyncPlayer } from "@/components/player/SmartSyncPlayer";
 import { storageUrl } from "@/lib/storage/urls";
 import { variantPosterKey } from "@/lib/storage/keys";
 import { formatDuration, formatFileSize } from "@/lib/utils/format";
@@ -33,7 +34,7 @@ export default function PreviewPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [variants, setVariants] = useState<Variant[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
-  const [useSmartPlayer, setUseSmartPlayer] = useState(true);
+  const [playerMode, setPlayerMode] = useState<"smartsync" | "smart" | "simple">("smartsync");
   const supabase = useMemo(() => createClient(), []);
 
   useEffect(() => {
@@ -91,8 +92,19 @@ export default function PreviewPage() {
           <div className="lg:col-span-2 space-y-3">
             <Card className="border-border bg-card overflow-hidden">
               <CardContent className="p-0">
-                {selected && useSmartPlayer && selected.hook_clip_storage_key && selected.video_storage_key ? (
-                  <div key={selected.id}>
+                {selected && playerMode === "smartsync" && selected.hook_clip_storage_key && selected.video_storage_key ? (
+                  <div key={`${selected.id}-smartsync`}>
+                    <SmartSyncPlayer
+                      hookClipUrl={storageUrl(selected.hook_clip_storage_key)}
+                      fullVideoUrl={storageUrl(selected.video_storage_key)}
+                      hookEndTimeMs={selected.hook_end_time_ms || 0}
+                      posterUrl={storageUrl(variantPosterKey(projectId, selected.id))}
+                      variantId={selected.id}
+                      projectSlug="preview"
+                    />
+                  </div>
+                ) : selected && playerMode === "smart" && selected.hook_clip_storage_key && selected.video_storage_key ? (
+                  <div key={`${selected.id}-smart`}>
                     <EmbedPlayer
                       hookClipUrl={storageUrl(selected.hook_clip_storage_key)}
                       fullVideoUrl={storageUrl(selected.video_storage_key)}
@@ -104,7 +116,7 @@ export default function PreviewPage() {
                   </div>
                 ) : selected?.video_storage_key ? (
                   <video
-                    key={selected.id}
+                    key={`${selected.id}-simple`}
                     controls
                     preload="auto"
                     className="aspect-video w-full bg-black"
@@ -136,9 +148,19 @@ export default function PreviewPage() {
             <div className="flex items-center gap-2">
               <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
                 <button
-                  onClick={() => setUseSmartPlayer(true)}
+                  onClick={() => setPlayerMode("smartsync")}
                   className={`rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
-                    useSmartPlayer
+                    playerMode === "smartsync"
+                      ? "bg-primary/15 text-primary shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  AI Smart Sync
+                </button>
+                <button
+                  onClick={() => setPlayerMode("smart")}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                    playerMode === "smart"
                       ? "bg-primary/15 text-primary shadow-sm"
                       : "text-muted-foreground hover:text-foreground"
                   }`}
@@ -146,9 +168,9 @@ export default function PreviewPage() {
                   Smart Player
                 </button>
                 <button
-                  onClick={() => setUseSmartPlayer(false)}
+                  onClick={() => setPlayerMode("simple")}
                   className={`rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
-                    !useSmartPlayer
+                    playerMode === "simple"
                       ? "bg-primary/15 text-primary shadow-sm"
                       : "text-muted-foreground hover:text-foreground"
                   }`}
@@ -157,9 +179,11 @@ export default function PreviewPage() {
                 </button>
               </div>
               <span className="text-xs text-muted-foreground ml-1">
-                {useSmartPlayer
-                  ? "Hook preloading + instant playback (what viewers see)"
-                  : "Standard controls for scrubbing/debugging"}
+                {playerMode === "smartsync"
+                  ? "Parallel sync — zero-glitch swap (recommended)"
+                  : playerMode === "smart"
+                    ? "Seek-based swap with hook preloading"
+                    : "Standard controls for scrubbing/debugging"}
               </span>
             </div>
           </div>
