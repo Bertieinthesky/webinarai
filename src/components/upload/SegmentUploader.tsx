@@ -125,8 +125,6 @@ export function SegmentUploader({
           );
 
           // 2. Upload directly to R2 via presigned URL (XHR for progress)
-          console.log("[Upload] Presigned URL host:", new URL(uploadUrl).hostname);
-          console.log("[Upload] Content-Type:", file.type);
           await new Promise<void>((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             xhrMap.current.set(file, xhr);

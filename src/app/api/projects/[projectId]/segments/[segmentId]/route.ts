@@ -18,7 +18,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { handleApiError, errorResponse } from "@/lib/utils/errors";
 
 export async function PATCH(
@@ -28,7 +28,7 @@ export async function PATCH(
   try {
     const { projectId, segmentId } = await params;
     const body = await req.json();
-    const supabase = await createClient();
+    const supabase = createAdminClient();
 
     const { data, error } = await supabase
       .from("segments")
@@ -51,7 +51,7 @@ export async function DELETE(
 ) {
   try {
     const { projectId, segmentId } = await params;
-    const supabase = await createClient();
+    const supabase = createAdminClient();
 
     const { error } = await supabase
       .from("segments")

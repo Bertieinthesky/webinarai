@@ -9,7 +9,7 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -44,19 +44,37 @@ function StatusBadge({ status }: { status: string }) {
 export default function DashboardPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
   const supabase = createClient();
 
-  useEffect(() => {
-    async function loadProjects() {
-      const { data } = await supabase
-        .from("projects")
-        .select("*")
-        .order("created_at", { ascending: false });
-      setProjects((data as Project[]) || []);
-      setLoading(false);
-    }
-    loadProjects();
+  const loadProjects = useCallback(async () => {
+    const { data } = await supabase
+      .from("projects")
+      .select("*")
+      .order("created_at", { ascending: false });
+    setProjects((data as Project[]) || []);
+    setLoading(false);
   }, [supabase]);
+
+  useEffect(() => {
+    loadProjects();
+  }, [loadProjects]);
+
+  async function deleteProject(projectId: string) {
+    setDeleting(projectId);
+    try {
+      const res = await fetch(`/api/projects/${projectId}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        setProjects((prev) => prev.filter((p) => p.id !== projectId));
+      }
+    } finally {
+      setDeleting(null);
+      setConfirmId(null);
+    }
+  }
 
   return (
     <div>
@@ -110,25 +128,58 @@ export default function DashboardPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((project) => (
-            <Link key={project.id} href={`/projects/${project.id}`}>
-              <Card className="group cursor-pointer border-border bg-card transition-all duration-150 hover:border-primary/30 hover:bg-card/80">
-                <CardHeader className="pb-4">
-                  <div className="flex items-start justify-between">
-                    <CardTitle className="text-[15px] font-medium text-foreground group-hover:text-primary transition-colors duration-150">
-                      {project.name}
-                    </CardTitle>
-                    <StatusBadge status={project.status} />
-                  </div>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    {new Date(project.created_at).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric",
-                    })}
-                  </p>
-                </CardHeader>
-              </Card>
-            </Link>
+            <div key={project.id} className="relative">
+              <Link href={`/projects/${project.id}`}>
+                <Card className="group cursor-pointer border-border bg-card transition-all duration-150 hover:border-primary/30 hover:bg-card/80">
+                  <CardHeader className="pb-4">
+                    <div className="flex items-start justify-between">
+                      <CardTitle className="text-[15px] font-medium text-foreground group-hover:text-primary transition-colors duration-150 pr-8">
+                        {project.name}
+                      </CardTitle>
+                      <StatusBadge status={project.status} />
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {new Date(project.created_at).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })}
+                    </p>
+                  </CardHeader>
+                </Card>
+              </Link>
+              {/* Delete button */}
+              {confirmId === project.id ? (
+                <div className="absolute right-2 top-2 flex items-center gap-1.5 z-10">
+                  <button
+                    onClick={() => deleteProject(project.id)}
+                    disabled={deleting === project.id}
+                    className="rounded-md bg-red-500/15 px-2.5 py-1 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/25 disabled:opacity-50"
+                  >
+                    {deleting === project.id ? "Deleting..." : "Confirm"}
+                  </button>
+                  <button
+                    onClick={() => setConfirmId(null)}
+                    className="rounded-md bg-zinc-500/15 px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-zinc-500/25"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setConfirmId(project.id);
+                  }}
+                  className="absolute right-2 top-2 z-10 rounded-md p-1.5 text-muted-foreground/50 opacity-0 transition-all hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100 [div:hover>&]:opacity-100"
+                  title="Delete project"
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                  </svg>
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}

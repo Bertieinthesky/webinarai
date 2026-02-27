@@ -1,23 +1,14 @@
 /**
- * middleware.ts — Supabase session management for Next.js middleware
+ * middleware.ts — Auth gate + Supabase session refresh
  *
  * PURPOSE:
- *   Refreshes the Supabase auth session on every request and protects
- *   dashboard routes from unauthenticated access. Public routes (embed
- *   pages, tracking API, auth pages) are excluded from protection.
- *
- * HOW IT WORKS:
- *   1. Reads the auth session from cookies
- *   2. Refreshes the session if it's expired (Supabase uses JWTs with short TTL)
- *   3. If the user is NOT authenticated and the route is protected,
- *      redirects to /login
- *   4. If the user IS authenticated or the route is public, passes through
+ *   1. Refreshes the Supabase auth session on every request (keeps JWT alive)
+ *   2. Protects dashboard routes using the simple password cookie
  *
  * PUBLIC ROUTES (no auth required):
- *   - /login, /signup, /callback (auth flow)
- *   - /e/* (embed pages — these are public-facing player pages)
- *   - /api/embed/* (variant assignment API — called by embed player)
- *   - /api/track (event tracking — called by embed player)
+ *   - /login (password gate)
+ *   - /e/* (embed pages — public-facing player pages)
+ *   - /api/* (all API routes handle their own auth)
  */
 
 import { createServerClient } from "@supabase/ssr";
@@ -26,6 +17,7 @@ import { NextResponse, type NextRequest } from "next/server";
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
+  // Refresh Supabase session (keeps JWT alive between requests)
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -47,22 +39,30 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // This call refreshes the session if expired
+  await supabase.auth.getUser();
 
-  // Redirect unauthenticated users to login (except public routes)
+  // Check the simple password gate cookie
+  const isAuthenticated =
+    request.cookies.get("webinar_auth")?.value === "authenticated";
+
   const isPublicRoute =
     request.nextUrl.pathname.startsWith("/login") ||
     request.nextUrl.pathname.startsWith("/signup") ||
     request.nextUrl.pathname.startsWith("/callback") ||
     request.nextUrl.pathname.startsWith("/e/") ||
-    request.nextUrl.pathname.startsWith("/api/embed") ||
-    request.nextUrl.pathname.startsWith("/api/track");
+    request.nextUrl.pathname.startsWith("/api/");
 
-  if (!user && !isPublicRoute) {
+  if (!isAuthenticated && !isPublicRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
+    return NextResponse.redirect(url);
+  }
+
+  // If authenticated and on login page, redirect to dashboard
+  if (isAuthenticated && request.nextUrl.pathname === "/login") {
+    const url = request.nextUrl.clone();
+    url.pathname = "/";
     return NextResponse.redirect(url);
   }
 

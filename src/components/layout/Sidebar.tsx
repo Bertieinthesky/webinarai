@@ -10,7 +10,6 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -27,32 +26,21 @@ const navItems = [
 
 function LogoMark() {
   return (
-    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-      {/* Play triangle */}
-      <path
-        d="M8 5.5L22 14L8 22.5V5.5Z"
-        fill="hsl(199 89% 48%)"
-        opacity="0.9"
-      />
-      {/* Split lines representing A/B variants */}
-      <path
-        d="M12 10L18 14L12 18"
-        stroke="hsl(199 50% 6%)"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+        <rect x="2" y="4" width="20" height="16" rx="3" stroke="hsl(199 89% 48%)" strokeWidth="1.5" fill="none" />
+        <path d="M10 8.5V15.5L16 12L10 8.5Z" fill="hsl(199 89% 48%)" />
+      </svg>
+    </div>
   );
 }
 
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const supabase = createClient();
 
   async function handleSignOut() {
-    await supabase.auth.signOut();
+    await fetch("/api/auth/logout", { method: "POST" });
     router.push("/login");
     router.refresh();
   }
@@ -62,13 +50,8 @@ export function Sidebar() {
       {/* Logo */}
       <div className="flex h-14 items-center gap-2.5 px-5">
         <LogoMark />
-        <Link href="/" className="flex items-baseline gap-0.5">
-          <span className="text-[15px] font-semibold tracking-tight text-foreground">
-            webinar
-          </span>
-          <span className="text-[15px] font-semibold tracking-tight text-primary">
-            .ai
-          </span>
+        <Link href="/" className="text-[15px] font-semibold tracking-tight text-foreground">
+          Webinar <span className="text-primary">AI</span>
         </Link>
       </div>
 

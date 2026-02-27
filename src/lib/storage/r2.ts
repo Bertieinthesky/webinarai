@@ -30,6 +30,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
@@ -105,6 +106,36 @@ export async function deleteObject(key: string): Promise<void> {
     Key: key,
   });
   await r2Client.send(command);
+}
+
+export async function deleteByPrefix(prefix: string): Promise<number> {
+  let deleted = 0;
+  let continuationToken: string | undefined;
+
+  do {
+    const list = await r2Client.send(
+      new ListObjectsV2Command({
+        Bucket: BUCKET,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      })
+    );
+
+    if (list.Contents) {
+      for (const obj of list.Contents) {
+        if (obj.Key) {
+          await r2Client.send(
+            new DeleteObjectCommand({ Bucket: BUCKET, Key: obj.Key })
+          );
+          deleted++;
+        }
+      }
+    }
+
+    continuationToken = list.NextContinuationToken;
+  } while (continuationToken);
+
+  return deleted;
 }
 
 export { r2Client, BUCKET };

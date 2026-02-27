@@ -1,55 +1,149 @@
 /**
- * /api/projects/[projectId]/upload — Proxy upload to R2
+ * /api/projects/[projectId]/upload — Chunked upload proxy to R2
  *
- * PURPOSE:
- *   Proxies file uploads from the browser to Cloudflare R2, bypassing CORS
- *   restrictions. The browser sends the file here, and this route streams
- *   it to R2 using the presigned URL.
+ * Handles multipart uploads for large video files (up to multi-GB).
+ * The browser sends the file in 4MB chunks, each goes through this
+ * proxy to R2. This avoids Vercel's 4.5MB body limit AND avoids
+ * needing CORS on R2 for direct browser uploads.
  *
- *   In production with CORS configured on R2, the browser can upload
- *   directly via presigned URLs. This proxy exists for development
- *   and as a fallback.
- *
- * EXPECTS:
- *   PUT with query params: ?key=<storage_key>&contentType=<mime_type>
- *   Body: raw file bytes
+ * FLOW:
+ *   1. POST   — Initiate multipart upload → returns uploadId
+ *   2. PUT    — Upload a single chunk (part) → returns ETag
+ *   3. PATCH  — Complete the multipart upload (finalize all parts)
+ *   4. DELETE — Abort a failed multipart upload
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { uploadFromBuffer } from "@/lib/storage/r2";
+import {
+  S3Client,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
+} from "@aws-sdk/client-s3";
 import { handleApiError, errorResponse } from "@/lib/utils/errors";
 
-export async function PUT(
-  req: NextRequest,
-  { params }: { params: Promise<{ projectId: string }> }
-) {
+const r2 = new S3Client({
+  region: "auto",
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+  },
+});
+
+const BUCKET = process.env.R2_BUCKET_NAME!;
+
+/**
+ * POST — Initiate multipart upload
+ * Body: { key, contentType }
+ * Returns: { uploadId }
+ */
+export async function POST(req: NextRequest) {
   try {
-    const { projectId } = await params;
-    const supabase = await createClient();
+    const { key, contentType } = await req.json();
+    if (!key) return errorResponse("Missing key", 400);
 
-    // Verify authenticated
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return errorResponse("Unauthorized", 401);
+    const command = new CreateMultipartUploadCommand({
+      Bucket: BUCKET,
+      Key: key,
+      ContentType: contentType || "video/mp4",
+    });
 
-    // Verify project belongs to user
-    const { data: project } = await supabase
-      .from("projects")
-      .select("id")
-      .eq("id", projectId)
-      .eq("user_id", user.id)
-      .single();
+    const result = await r2.send(command);
+    return NextResponse.json({ uploadId: result.UploadId });
+  } catch (error) {
+    return handleApiError(error);
+  }
+}
 
-    if (!project) return errorResponse("Project not found", 404);
-
+/**
+ * PUT — Upload a single chunk (part)
+ * Query: ?key=...&uploadId=...&partNumber=...
+ * Body: raw chunk bytes
+ * Returns: { etag }
+ */
+export async function PUT(req: NextRequest) {
+  try {
     const key = req.nextUrl.searchParams.get("key");
-    const contentType = req.nextUrl.searchParams.get("contentType") || "video/mp4";
+    const uploadId = req.nextUrl.searchParams.get("uploadId");
+    const partNumber = parseInt(
+      req.nextUrl.searchParams.get("partNumber") || "1"
+    );
 
-    if (!key) return errorResponse("Missing key parameter", 400);
+    if (!key || !uploadId) {
+      return errorResponse("Missing key or uploadId", 400);
+    }
 
     const body = await req.arrayBuffer();
-    await uploadFromBuffer(key, Buffer.from(body), contentType);
 
+    const command = new UploadPartCommand({
+      Bucket: BUCKET,
+      Key: key,
+      UploadId: uploadId,
+      PartNumber: partNumber,
+      Body: Buffer.from(body),
+    });
+
+    const result = await r2.send(command);
+    return NextResponse.json({ etag: result.ETag });
+  } catch (error) {
+    return handleApiError(error);
+  }
+}
+
+/**
+ * PATCH — Complete multipart upload
+ * Body: { key, uploadId, parts: [{ partNumber, etag }] }
+ */
+export async function PATCH(req: NextRequest) {
+  try {
+    const { key, uploadId, parts } = await req.json();
+    if (!key || !uploadId || !parts) {
+      return errorResponse("Missing key, uploadId, or parts", 400);
+    }
+
+    const command = new CompleteMultipartUploadCommand({
+      Bucket: BUCKET,
+      Key: key,
+      UploadId: uploadId,
+      MultipartUpload: {
+        Parts: parts.map(
+          (p: { partNumber: number; etag: string }) => ({
+            PartNumber: p.partNumber,
+            ETag: p.etag,
+          })
+        ),
+      },
+    });
+
+    await r2.send(command);
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return handleApiError(error);
+  }
+}
+
+/**
+ * DELETE — Abort multipart upload (cleanup on failure)
+ * Query: ?key=...&uploadId=...
+ */
+export async function DELETE(req: NextRequest) {
+  try {
+    const key = req.nextUrl.searchParams.get("key");
+    const uploadId = req.nextUrl.searchParams.get("uploadId");
+
+    if (!key || !uploadId) {
+      return errorResponse("Missing key or uploadId", 400);
+    }
+
+    const command = new AbortMultipartUploadCommand({
+      Bucket: BUCKET,
+      Key: key,
+      UploadId: uploadId,
+    });
+
+    await r2.send(command);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return handleApiError(error);

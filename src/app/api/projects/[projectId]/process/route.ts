@@ -26,7 +26,6 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateCombinations } from "@/lib/variant/combinations";
 import { enqueueNormalize } from "@/lib/queue/jobs";
@@ -42,11 +41,10 @@ export async function POST(
 ) {
   try {
     const { projectId } = await params;
-    const supabase = await createClient();
     const admin = createAdminClient();
 
     // Verify project belongs to user
-    const { data: project, error: projectError } = await supabase
+    const { data: project, error: projectError } = await admin
       .from("projects")
       .select("*")
       .eq("id", projectId)
@@ -62,7 +60,7 @@ export async function POST(
     }
 
     // Get all uploaded segments
-    const { data: segments, error: segError } = await supabase
+    const { data: segments, error: segError } = await admin
       .from("segments")
       .select("*")
       .eq("project_id", projectId)

@@ -21,7 +21,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getPresignedUploadUrl } from "@/lib/storage/r2";
 import { originalSegmentKey } from "@/lib/storage/keys";
 import { handleApiError, errorResponse } from "@/lib/utils/errors";
@@ -42,7 +42,7 @@ export async function GET(
 ) {
   try {
     const { projectId } = await params;
-    const supabase = await createClient();
+    const supabase = createAdminClient();
     const { data, error } = await supabase
       .from("segments")
       .select("*")
@@ -66,7 +66,7 @@ export async function POST(
     const body = await req.json();
     const parsed = createSegmentSchema.parse(body);
 
-    const supabase = await createClient();
+    const supabase = createAdminClient();
 
     // Verify project exists and belongs to user
     const { data: project, error: projectError } = await supabase
