@@ -53,6 +53,15 @@
  *     → embed player can now serve variants
  */
 
+// Catch ALL uncaught errors — log them before the process dies
+process.on("uncaughtException", (err) => {
+  console.error("[worker] UNCAUGHT EXCEPTION:", err.message, err.stack);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[worker] UNHANDLED REJECTION:", reason);
+});
+
 // Local dev: run with `npx dotenv -e .env.local -- npx tsx src/workers/video-processor.ts`
 // Production (Railway): env vars injected directly. dotenv is removed from
 // the Docker image because v17 auto-patches process.env and shadows them.
@@ -71,6 +80,7 @@ import { extractPosterFrame } from "../lib/video/extract-poster";
 import { runFFmpeg } from "../lib/video/commands";
 import { normalizedSegmentKey, variantVideoKey, variantHookClipKey, variantPosterKey } from "../lib/storage/keys";
 import { getRedisConnection } from "../lib/queue/connection";
+import { createServer } from "http";
 import type { NormalizeJobData, RenderJobData } from "../lib/queue/types";
 import type { Database } from "../lib/supabase/types";
 
@@ -681,7 +691,6 @@ process.on("SIGINT", async () => {
 
 // Health check server — Railway expects a listening port for web services.
 // This keeps the container alive and provides a /health endpoint for monitoring.
-import { createServer } from "http";
 const PORT = parseInt(process.env.PORT || "3001", 10);
 createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "application/json" });
