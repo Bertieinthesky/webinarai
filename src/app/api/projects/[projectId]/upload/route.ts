@@ -13,6 +13,9 @@
  *   4. DELETE — Abort a failed multipart upload
  */
 
+// Allow 5MB body for chunk uploads and 60s timeout for slow connections
+export const maxDuration = 60;
+
 import { NextRequest, NextResponse } from "next/server";
 import {
   S3Client,

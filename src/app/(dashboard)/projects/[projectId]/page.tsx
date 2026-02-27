@@ -87,23 +87,15 @@ export default function ProjectDetailPage() {
     load();
   }, [load]);
 
-  // Real-time subscription: reload when segments or variants change status
+  // Listen for project status changes only (not segments/variants —
+  // ProcessingProgress handles those with its own subscription to avoid
+  // race conditions from duplicate subscriptions)
   useEffect(() => {
     const channel = supabase
-      .channel(`project-${projectId}`)
+      .channel(`project-status-${projectId}`)
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "segments", filter: `project_id=eq.${projectId}` },
-        () => load()
-      )
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "variants", filter: `project_id=eq.${projectId}` },
-        () => load()
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "projects", filter: `id=eq.${projectId}` },
+        { event: "UPDATE", schema: "public", table: "projects", filter: `id=eq.${projectId}` },
         () => load()
       )
       .subscribe();
@@ -132,7 +124,10 @@ export default function ProjectDetailPage() {
   const renderedVariants = variants.filter((v) => v.status === "rendered");
   const failedVariants = variants.filter((v) => v.status === "failed");
   const failedSegments = segments.filter((s) => s.status === "failed");
-  const hasFailures = failedVariants.length > 0 || failedSegments.length > 0;
+  // Only show failure banner when project is NOT actively processing
+  // (during processing, segments may temporarily fail and retry)
+  const hasFailures = project.status !== "processing" &&
+    (failedVariants.length > 0 || failedSegments.length > 0);
 
   const segmentCounts = [
     { label: "Hooks", count: hooks.length, color: "text-sky-400", bg: "bg-sky-500/10", iconBg: "bg-sky-500/15" },
@@ -226,7 +221,7 @@ export default function ProjectDetailPage() {
                 </p>
               </div>
             </div>
-            <RetryButton projectId={projectId} />
+            <RetryButton projectId={projectId} onRetry={load} />
           </CardContent>
         </Card>
       )}
@@ -289,13 +284,13 @@ export default function ProjectDetailPage() {
         bodies.length > 0 &&
         ctas.length > 0 &&
         project.status === "draft" && (
-          <ProcessButton projectId={projectId} />
+          <ProcessButton projectId={projectId} onProcess={load} />
         )}
     </div>
   );
 }
 
-function RetryButton({ projectId }: { projectId: string }) {
+function RetryButton({ projectId, onRetry }: { projectId: string; onRetry: () => void }) {
   const [loading, setLoading] = useState(false);
   const supabase = useMemo(() => createClient(), []);
 
@@ -335,7 +330,8 @@ function RetryButton({ projectId }: { projectId: string }) {
         throw new Error("Failed to start reprocessing");
       }
 
-      window.location.reload();
+      // Refresh data without full page reload to avoid race conditions
+      onRetry();
     } catch {
       setLoading(false);
     }
@@ -357,7 +353,7 @@ function RetryButton({ projectId }: { projectId: string }) {
   );
 }
 
-function ProcessButton({ projectId }: { projectId: string }) {
+function ProcessButton({ projectId, onProcess }: { projectId: string; onProcess: () => void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -373,7 +369,8 @@ function ProcessButton({ projectId }: { projectId: string }) {
         const data = await res.json();
         throw new Error(data.error || "Failed to start processing");
       }
-      window.location.reload();
+      // Refresh data without full page reload to avoid race conditions
+      onProcess();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setLoading(false);

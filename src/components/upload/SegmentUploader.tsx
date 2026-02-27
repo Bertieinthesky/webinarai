@@ -6,9 +6,9 @@
  *   Three of these are rendered side-by-side on the upload page, one per type.
  *
  * UPLOAD STRATEGY:
- *   Direct browser-to-R2 uploads via presigned URLs. The API creates a segment
- *   record and returns a presigned PUT URL. The browser uploads directly to R2
- *   using XHR (for progress tracking). No file size limits.
+ *   - Small files (<100MB): Direct browser-to-R2 upload via presigned URL (fast, simple)
+ *   - Large files (>=100MB): Chunked upload through /api/projects/[id]/upload proxy
+ *     (4MB chunks, avoids browser XHR timeouts on slow connections)
  */
 
 "use client";
@@ -69,6 +69,84 @@ const statusBadge: Record<string, string> = {
   normalizing: "bg-amber-500/10 text-amber-400",
 };
 
+// Chunked upload threshold: files >= 100MB use chunked upload
+const CHUNK_THRESHOLD = 100 * 1024 * 1024;
+const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB chunks
+
+/**
+ * Upload a large file using chunked multipart upload through the API proxy.
+ * Each chunk goes through /api/projects/[id]/upload as a 4MB part.
+ */
+async function chunkedUpload(
+  projectId: string,
+  storageKey: string,
+  file: File,
+  contentType: string,
+  onProgress: (pct: number) => void,
+  abortSignal: AbortSignal,
+): Promise<void> {
+  const uploadBaseUrl = `/api/projects/${projectId}/upload`;
+
+  // 1. Initiate multipart upload
+  const initRes = await fetch(uploadBaseUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: storageKey, contentType }),
+    signal: abortSignal,
+  });
+  if (!initRes.ok) throw new Error("Failed to initiate chunked upload");
+  const { uploadId } = await initRes.json();
+
+  try {
+    // 2. Upload chunks
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const parts: { partNumber: number; etag: string }[] = [];
+
+    for (let i = 0; i < totalChunks; i++) {
+      if (abortSignal.aborted) throw new Error("Upload cancelled");
+
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const chunk = file.slice(start, end);
+      const partNumber = i + 1;
+
+      const partRes = await fetch(
+        `${uploadBaseUrl}?key=${encodeURIComponent(storageKey)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${partNumber}`,
+        {
+          method: "PUT",
+          body: chunk,
+          signal: abortSignal,
+        }
+      );
+
+      if (!partRes.ok) {
+        throw new Error(`Chunk ${partNumber}/${totalChunks} failed (${partRes.status})`);
+      }
+
+      const { etag } = await partRes.json();
+      parts.push({ partNumber, etag });
+
+      onProgress(Math.round((partNumber / totalChunks) * 100));
+    }
+
+    // 3. Complete multipart upload
+    const completeRes = await fetch(uploadBaseUrl, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: storageKey, uploadId, parts }),
+      signal: abortSignal,
+    });
+    if (!completeRes.ok) throw new Error("Failed to complete chunked upload");
+  } catch (err) {
+    // Abort the multipart upload on failure
+    await fetch(
+      `${uploadBaseUrl}?key=${encodeURIComponent(storageKey)}&uploadId=${encodeURIComponent(uploadId)}`,
+      { method: "DELETE" }
+    ).catch(() => {});
+    throw err;
+  }
+}
+
 export function SegmentUploader({
   projectId,
   type,
@@ -80,6 +158,7 @@ export function SegmentUploader({
   const [deleting, setDeleting] = useState<Set<string>>(new Set());
   const config = typeConfig[type];
   const xhrMap = useRef<Map<File, XMLHttpRequest>>(new Map());
+  const abortMap = useRef<Map<File, AbortController>>(new Map());
 
   const handleFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -124,46 +203,70 @@ export function SegmentUploader({
             )
           );
 
-          // 2. Upload directly to R2 via presigned URL (XHR for progress)
-          await new Promise<void>((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhrMap.current.set(file, xhr);
+          // 2. Upload file — choose strategy based on size
+          if (file.size >= CHUNK_THRESHOLD) {
+            // Large file: chunked upload through API proxy
+            const controller = new AbortController();
+            abortMap.current.set(file, controller);
 
-            xhr.upload.addEventListener("progress", (e) => {
-              if (e.lengthComputable) {
-                const pct = Math.round((e.loaded / e.total) * 100);
+            await chunkedUpload(
+              projectId,
+              segment.original_storage_key,
+              file,
+              file.type,
+              (pct) => {
                 setUploads((prev) =>
                   prev.map((u) =>
                     u.file === file ? { ...u, progress: pct } : u
                   )
                 );
-              }
-            });
-            xhr.addEventListener("load", () => {
-              xhrMap.current.delete(file);
-              if (xhr.status >= 200 && xhr.status < 300) {
-                resolve();
-              } else {
-                reject(
-                  new Error(
-                    `Upload failed (${xhr.status}): ${xhr.responseText?.slice(0, 200) || "No response"}`
-                  )
-                );
-              }
-            });
-            xhr.addEventListener("error", () => {
-              xhrMap.current.delete(file);
-              reject(new Error("Network error — check CORS configuration"));
-            });
-            xhr.addEventListener("abort", () => {
-              xhrMap.current.delete(file);
-              reject(new Error("Upload cancelled"));
-            });
+              },
+              controller.signal,
+            );
 
-            xhr.open("PUT", uploadUrl);
-            xhr.setRequestHeader("Content-Type", file.type);
-            xhr.send(file);
-          });
+            abortMap.current.delete(file);
+          } else {
+            // Small file: direct presigned URL upload (XHR for progress)
+            await new Promise<void>((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              xhrMap.current.set(file, xhr);
+
+              xhr.upload.addEventListener("progress", (e) => {
+                if (e.lengthComputable) {
+                  const pct = Math.round((e.loaded / e.total) * 100);
+                  setUploads((prev) =>
+                    prev.map((u) =>
+                      u.file === file ? { ...u, progress: pct } : u
+                    )
+                  );
+                }
+              });
+              xhr.addEventListener("load", () => {
+                xhrMap.current.delete(file);
+                if (xhr.status >= 200 && xhr.status < 300) {
+                  resolve();
+                } else {
+                  reject(
+                    new Error(
+                      `Upload failed (${xhr.status}): ${xhr.responseText?.slice(0, 200) || "No response"}`
+                    )
+                  );
+                }
+              });
+              xhr.addEventListener("error", () => {
+                xhrMap.current.delete(file);
+                reject(new Error("Network error — check CORS configuration"));
+              });
+              xhr.addEventListener("abort", () => {
+                xhrMap.current.delete(file);
+                reject(new Error("Upload cancelled"));
+              });
+
+              xhr.open("PUT", uploadUrl);
+              xhr.setRequestHeader("Content-Type", file.type);
+              xhr.send(file);
+            });
+          }
 
           // 3. Mark segment as uploaded
           await fetch(
@@ -205,9 +308,15 @@ export function SegmentUploader({
   );
 
   function cancelUpload(upload: UploadState) {
+    // Cancel XHR (small file) or AbortController (chunked)
     const xhr = xhrMap.current.get(upload.file);
     if (xhr) {
       xhr.abort();
+    }
+    const controller = abortMap.current.get(upload.file);
+    if (controller) {
+      controller.abort();
+      abortMap.current.delete(upload.file);
     }
     if (upload.segmentId) {
       fetch(`/api/projects/${projectId}/segments/${upload.segmentId}`, {
