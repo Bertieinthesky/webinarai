@@ -58,15 +58,15 @@ export default function EmbedPage() {
   const appUrl = typeof window !== "undefined" ? window.location.origin : "";
 
   const embedCode = `<!-- webinar.ai Video Player -->
-<iframe
-  src="${appUrl}/e/${project.slug}"
-  width="640"
-  height="360"
-  frameborder="0"
-  allow="autoplay; fullscreen"
-  allowfullscreen
-  style="max-width: 100%; aspect-ratio: 16/9;">
-</iframe>`;
+<div style="position: relative; width: 100%; padding-top: 56.25%; overflow: hidden;">
+  <iframe
+    src="${appUrl}/e/${project.slug}"
+    frameborder="0"
+    allow="autoplay; fullscreen"
+    allowfullscreen
+    style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 0;">
+  </iframe>
+</div>`;
 
   const directUrl = `${appUrl}/e/${project.slug}`;
 
