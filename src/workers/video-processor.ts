@@ -639,7 +639,7 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
 
 const normalizeWorker = new Worker("normalize", processNormalize, {
   connection: redisConn,
-  concurrency: 2,
+  concurrency: 1,
   lockDuration: NORMALIZE_TIMEOUT_MS,
 });
 

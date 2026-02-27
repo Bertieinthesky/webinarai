@@ -27,6 +27,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { assignVariant, generateViewerId } from "@/lib/variant/assignment";
 import { publicUrl } from "@/lib/storage/urls";
+import { variantPosterKey } from "@/lib/storage/keys";
 
 export const runtime = "nodejs"; // Use edge in production for global low latency
 
@@ -85,6 +86,7 @@ export async function GET(
       variantCode: variant.variant_code,
       hookClipUrl: publicUrl(variant.hook_clip_storage_key!),
       fullVideoUrl: publicUrl(variant.video_storage_key!),
+      posterUrl: publicUrl(variantPosterKey(project.id, variant.id)),
       hookEndTimeMs: variant.hook_end_time_ms,
       totalDurationMs: variant.video_duration_ms,
     });
