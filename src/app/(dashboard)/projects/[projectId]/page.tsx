@@ -122,6 +122,15 @@ export default function ProjectDetailPage() {
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-semibold tracking-tight text-foreground">{project.name}</h1>
             <StatusBadge status={project.status} />
+            <button
+              onClick={load}
+              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              title="Refresh"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M20.984 4.356v4.992" />
+              </svg>
+            </button>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
             Created {new Date(project.created_at).toLocaleDateString("en-US", {
@@ -170,8 +179,8 @@ export default function ProjectDetailPage() {
         ))}
       </div>
 
-      {/* Retry banner for failures */}
-      {hasFailures && project.status !== "processing" && (
+      {/* Retry banner for failures or stuck processing */}
+      {(hasFailures || project.status === "processing") && (
         <Card className="border-red-500/20 bg-red-500/5">
           <CardContent className="flex items-center justify-between p-4">
             <div className="flex items-center gap-3">
@@ -182,12 +191,18 @@ export default function ProjectDetailPage() {
               </div>
               <div>
                 <p className="text-sm font-medium text-red-400">
-                  {failedSegments.length > 0 && `${failedSegments.length} segment${failedSegments.length > 1 ? "s" : ""} failed`}
-                  {failedSegments.length > 0 && failedVariants.length > 0 && " · "}
-                  {failedVariants.length > 0 && `${failedVariants.length} variant${failedVariants.length > 1 ? "s" : ""} failed`}
+                  {hasFailures ? (
+                    <>
+                      {failedSegments.length > 0 && `${failedSegments.length} segment${failedSegments.length > 1 ? "s" : ""} failed`}
+                      {failedSegments.length > 0 && failedVariants.length > 0 && " · "}
+                      {failedVariants.length > 0 && `${failedVariants.length} variant${failedVariants.length > 1 ? "s" : ""} failed`}
+                    </>
+                  ) : (
+                    "Processing appears stuck"
+                  )}
                 </p>
                 <p className="mt-0.5 text-xs text-red-400/70">
-                  {failedSegments[0]?.error_message || failedVariants[0]?.error_message || "An error occurred during processing"}
+                  {failedSegments[0]?.error_message || failedVariants[0]?.error_message || "Reset to draft and try again"}
                 </p>
               </div>
             </div>
@@ -317,7 +332,7 @@ function RetryButton({ projectId }: { projectId: string }) {
       <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M20.984 4.356v4.992" />
       </svg>
-      {loading ? "Retrying..." : "Retry Processing"}
+      {loading ? "Resetting..." : "Reset & Retry"}
     </Button>
   );
 }
