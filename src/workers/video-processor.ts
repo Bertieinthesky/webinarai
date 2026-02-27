@@ -80,7 +80,6 @@ import { extractPosterFrame } from "../lib/video/extract-poster";
 import { runFFmpeg } from "../lib/video/commands";
 import { normalizedSegmentKey, variantVideoKey, variantHookClipKey, variantPosterKey } from "../lib/storage/keys";
 import { getRedisConnection } from "../lib/queue/connection";
-import { createServer } from "http";
 import type { NormalizeJobData, RenderJobData } from "../lib/queue/types";
 import type { Database } from "../lib/supabase/types";
 
@@ -112,18 +111,6 @@ function validateEnv(): void {
 }
 
 validateEnv();
-
-// ──────────────────────────────────────────
-// Health check server — start FIRST so Railway sees the port immediately
-// ──────────────────────────────────────────
-
-const PORT = parseInt(process.env.PORT || "3001", 10);
-createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ status: "ok" }));
-}).listen(PORT, () => {
-  console.log(`[worker] Health check listening on port ${PORT}`);
-});
 
 // ──────────────────────────────────────────
 // Initialize clients
