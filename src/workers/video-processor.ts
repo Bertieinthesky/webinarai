@@ -357,28 +357,33 @@ async function processNormalize(job: Job<NormalizeJobData>) {
     });
   } catch (error) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    log("error", "normalize", job.id, `Failed ${segmentId}`, {
+    const isFinalAttempt = job.attemptsMade >= (job.opts.attempts ?? 3) - 1;
+    log("error", "normalize", job.id, `Failed ${segmentId} (attempt ${job.attemptsMade + 1}/${job.opts.attempts ?? 3})`, {
       elapsedSec: elapsed,
       error: error instanceof Error ? error.message : "Unknown error",
     });
 
-    await supabase
-      .from("segments")
-      .update({
-        status: "failed",
-        error_message: error instanceof Error ? error.message : "Unknown error",
-      })
-      .eq("id", segmentId);
+    // Only mark as "failed" on final attempt — intermediate retries
+    // should not flash error states in the dashboard
+    if (isFinalAttempt) {
+      await supabase
+        .from("segments")
+        .update({
+          status: "failed",
+          error_message: "Segment processing failed. Please try again.",
+        })
+        .eq("id", segmentId);
 
-    await supabase
-      .from("processing_jobs")
-      .update({
-        status: "failed",
-        error_message: error instanceof Error ? error.message : "Unknown error",
-        completed_at: new Date().toISOString(),
-      })
-      .eq("target_id", segmentId)
-      .eq("job_type", "normalize");
+      await supabase
+        .from("processing_jobs")
+        .update({
+          status: "failed",
+          error_message: error instanceof Error ? error.message : "Unknown error",
+          completed_at: new Date().toISOString(),
+        })
+        .eq("target_id", segmentId)
+        .eq("job_type", "normalize");
+    }
 
     throw error;
   } finally {
@@ -576,28 +581,31 @@ async function processRender(job: Job<RenderJobData>) {
     });
   } catch (error) {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    log("error", "render", job.id, `Failed variant ${variantId}`, {
+    const isFinalAttempt = job.attemptsMade >= (job.opts.attempts ?? 3) - 1;
+    log("error", "render", job.id, `Failed variant ${variantId} (attempt ${job.attemptsMade + 1}/${job.opts.attempts ?? 3})`, {
       elapsedSec: elapsed,
       error: error instanceof Error ? error.message : "Unknown error",
     });
 
-    await supabase
-      .from("variants")
-      .update({
-        status: "failed",
-        error_message: error instanceof Error ? error.message : "Unknown error",
-      })
-      .eq("id", variantId);
+    if (isFinalAttempt) {
+      await supabase
+        .from("variants")
+        .update({
+          status: "failed",
+          error_message: "Variant rendering failed. Please try again.",
+        })
+        .eq("id", variantId);
 
-    await supabase
-      .from("processing_jobs")
-      .update({
-        status: "failed",
-        error_message: error instanceof Error ? error.message : "Unknown error",
-        completed_at: new Date().toISOString(),
-      })
-      .eq("target_id", variantId)
-      .eq("job_type", "render");
+      await supabase
+        .from("processing_jobs")
+        .update({
+          status: "failed",
+          error_message: error instanceof Error ? error.message : "Unknown error",
+          completed_at: new Date().toISOString(),
+        })
+        .eq("target_id", variantId)
+        .eq("job_type", "render");
+    }
 
     throw error;
   } finally {
@@ -636,6 +644,26 @@ console.log("Starting webinar.ai video processing workers...");
 
 const redisConn = getRedisConnection();
 console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${!!redisConn.tls})`);
+
+// Clean stale failed jobs from previous deploys
+(async () => {
+  try {
+    const { Queue } = await import("bullmq");
+    for (const queueName of ["normalize", "render"]) {
+      const q = new Queue(queueName, { connection: getRedisConnection() });
+      const failed = await q.getFailed();
+      if (failed.length > 0) {
+        console.log(`[worker] Cleaning ${failed.length} stale failed jobs from "${queueName}" queue`);
+        for (const job of failed) {
+          await job.remove();
+        }
+      }
+      await q.close();
+    }
+  } catch (err) {
+    console.error("[worker] Failed to clean stale jobs:", err);
+  }
+})();
 
 const normalizeWorker = new Worker("normalize", processNormalize, {
   connection: redisConn,
