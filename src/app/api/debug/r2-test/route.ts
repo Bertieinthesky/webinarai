@@ -14,11 +14,15 @@ export async function GET() {
       body: "r2 upload test",
     });
 
+    const responseBody = await res.text();
+
     return NextResponse.json({
       presignedUrlHost: new URL(url).hostname,
       presignedUrlPath: new URL(url).pathname,
+      fullUrl: url,
       uploadStatus: res.status,
       uploadOk: res.ok,
+      r2Response: responseBody.slice(0, 500),
       r2AccountId: process.env.R2_ACCOUNT_ID?.slice(0, 8) + "...",
       r2Bucket: process.env.R2_BUCKET_NAME,
     });
