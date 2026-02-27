@@ -20,6 +20,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { handleApiError, errorResponse } from "@/lib/utils/errors";
+import { z } from "zod";
+
+const updateSegmentSchema = z
+  .object({
+    label: z.string().max(200).optional(),
+    status: z
+      .enum(["uploading", "uploaded", "normalizing", "normalized", "failed"])
+      .optional(),
+    original_storage_key: z.string().optional(),
+    original_size_bytes: z.number().optional(),
+    error_message: z.string().nullable().optional(),
+  })
+  .strict();
 
 export async function PATCH(
   req: NextRequest,
@@ -28,11 +41,17 @@ export async function PATCH(
   try {
     const { projectId, segmentId } = await params;
     const body = await req.json();
+
+    const parsed = updateSegmentSchema.safeParse(body);
+    if (!parsed.success) {
+      return errorResponse(`Invalid fields: ${parsed.error.message}`, 400);
+    }
+
     const supabase = createAdminClient();
 
     const { data, error } = await supabase
       .from("segments")
-      .update(body)
+      .update(parsed.data)
       .eq("id", segmentId)
       .eq("project_id", projectId)
       .select()

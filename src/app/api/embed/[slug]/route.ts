@@ -80,12 +80,19 @@ export async function GET(
     const variantIndex = assignVariant(viewerId, project.id, variants.length);
     const variant = variants[variantIndex];
 
+    if (!variant.hook_clip_storage_key || !variant.video_storage_key) {
+      return NextResponse.json(
+        { error: "Variant files not ready" },
+        { status: 404 }
+      );
+    }
+
     const response = NextResponse.json({
       projectId: project.id,
       variantId: variant.id,
       variantCode: variant.variant_code,
-      hookClipUrl: publicUrl(variant.hook_clip_storage_key!),
-      fullVideoUrl: publicUrl(variant.video_storage_key!),
+      hookClipUrl: publicUrl(variant.hook_clip_storage_key),
+      fullVideoUrl: publicUrl(variant.video_storage_key),
       posterUrl: publicUrl(variantPosterKey(project.id, variant.id)),
       hookEndTimeMs: variant.hook_end_time_ms,
       totalDurationMs: variant.video_duration_ms,
@@ -101,12 +108,14 @@ export async function GET(
     });
 
     // CORS headers for cross-domain embed
+    // Note: Cannot use Allow-Credentials with Allow-Origin: * (browsers reject it).
+    // The wai_vid cookie works within same-site context; cross-origin embeds
+    // will get a new viewer ID each session (acceptable for A/B testing).
     response.headers.set("Access-Control-Allow-Origin", "*");
     response.headers.set(
       "Access-Control-Allow-Methods",
       "GET, OPTIONS"
     );
-    response.headers.set("Access-Control-Allow-Credentials", "true");
 
     return response;
   } catch (error) {
@@ -125,7 +134,6 @@ export async function OPTIONS() {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Allow-Credentials": "true",
     },
   });
 }

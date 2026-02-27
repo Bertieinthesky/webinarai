@@ -134,10 +134,14 @@ export async function POST(
         status: "queued",
       });
 
+      if (!seg.original_storage_key) {
+        return errorResponse(`Segment ${seg.label || seg.id} is missing its uploaded file`);
+      }
+
       await enqueueNormalize({
         projectId,
         segmentId: seg.id,
-        originalStorageKey: seg.original_storage_key!,
+        originalStorageKey: seg.original_storage_key,
       });
     }
 
@@ -159,7 +163,12 @@ export async function POST(
           const body = segmentMap.get(v.body_segment_id);
           const cta = segmentMap.get(v.cta_segment_id);
 
-          if (!hook?.normalized_storage_key || !body?.normalized_storage_key || !cta?.normalized_storage_key) {
+          if (
+            !hook?.normalized_storage_key ||
+            !body?.normalized_storage_key ||
+            !cta?.normalized_storage_key ||
+            !hook.normalized_duration_ms
+          ) {
             continue;
           }
 
@@ -179,7 +188,7 @@ export async function POST(
             hookNormalizedKey: hook.normalized_storage_key,
             bodyNormalizedKey: body.normalized_storage_key,
             ctaNormalizedKey: cta.normalized_storage_key,
-            hookDurationMs: hook.normalized_duration_ms!,
+            hookDurationMs: hook.normalized_duration_ms,
           });
         }
       }

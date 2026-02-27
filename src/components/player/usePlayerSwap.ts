@@ -38,7 +38,7 @@
 
 "use client";
 
-import { useRef, useState, useCallback, useEffect } from "react";
+import { useRef, useState, useCallback, useEffect, useMemo } from "react";
 
 export type PlayerPhase =
   | "idle"
@@ -75,8 +75,11 @@ export function usePlayerSwap({
   const [fullVideoReady, setFullVideoReady] = useState(false);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Active player is whichever is currently visible
-  const activeRef = phase === "playing_full" || phase === "ended" ? fullRef : hookRef;
+  // Active player is whichever is currently visible (memoized to prevent unnecessary re-renders)
+  const activeRef = useMemo(
+    () => (phase === "playing_full" || phase === "ended" ? fullRef : hookRef),
+    [phase]
+  );
 
   // Start loading when URLs are available
   useEffect(() => {
@@ -104,11 +107,12 @@ export function usePlayerSwap({
       }
     };
 
-    full.addEventListener("canplaythrough", () => setFullVideoReady(true));
+    const handleCanPlayThrough = () => setFullVideoReady(true);
+    full.addEventListener("canplaythrough", handleCanPlayThrough);
     full.addEventListener("progress", checkBuffer);
 
     return () => {
-      full.removeEventListener("canplaythrough", () => setFullVideoReady(true));
+      full.removeEventListener("canplaythrough", handleCanPlayThrough);
       full.removeEventListener("progress", checkBuffer);
     };
   }, [hookClipUrl, fullVideoUrl]);
@@ -186,12 +190,7 @@ export function usePlayerSwap({
       const active = activeRef.current;
       if (!active) return;
 
-      let time: number;
-      if (phase === "playing_hook") {
-        time = active.currentTime;
-      } else {
-        time = active.currentTime;
-      }
+      const time = active.currentTime;
       setCurrentTime(time);
 
       const dur = phase === "playing_full" ? (fullRef.current?.duration || 0) : 0;

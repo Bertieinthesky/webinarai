@@ -30,8 +30,8 @@
  *      - When ALL variants for a project are rendered, marks project as "ready"
  *
  * CONCURRENCY:
- *   - Normalize: 2 concurrent jobs (CPU-intensive, each uses ~200-400MB RAM)
- *   - Render: 4 concurrent jobs (stream-copy is I/O-bound, very lightweight)
+ *   - Normalize: 1 job at a time (CPU-intensive, ~200-400MB RAM per encode)
+ *   - Render: 1 job at a time (prevents memory pressure from concurrent downloads)
  *
  * ERROR HANDLING:
  *   - BullMQ retries failed jobs 3 times with exponential backoff
@@ -645,8 +645,9 @@ console.log("Starting webinar.ai video processing workers...");
 const redisConn = getRedisConnection();
 console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${!!redisConn.tls})`);
 
-// Clean stale failed jobs from previous deploys
+// Main startup: clean stale jobs THEN start workers
 (async () => {
+  // Step 1: Clean stale failed jobs from previous deploys
   try {
     const { Queue } = await import("bullmq");
     for (const queueName of ["normalize", "render"]) {
@@ -663,57 +664,56 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
   } catch (err) {
     console.error("[worker] Failed to clean stale jobs:", err);
   }
+
+  // Step 2: Start workers (only after cleanup is done)
+  const normalizeWorker = new Worker("normalize", processNormalize, {
+    connection: redisConn,
+    concurrency: 1,
+    lockDuration: NORMALIZE_TIMEOUT_MS,
+  });
+
+  const renderWorker = new Worker("render", processRender, {
+    connection: redisConn,
+    concurrency: 1,
+    lockDuration: RENDER_TIMEOUT_MS,
+  });
+
+  normalizeWorker.on("completed", (job) => {
+    log("info", "normalize", job.id, "Job completed");
+  });
+
+  normalizeWorker.on("failed", (job, err) => {
+    log("error", "normalize", job?.id, `Job failed: ${err.message}`);
+  });
+
+  normalizeWorker.on("error", (err) => {
+    log("error", "normalize", undefined, `Worker error: ${err.message}`);
+  });
+
+  renderWorker.on("completed", (job) => {
+    log("info", "render", job.id, "Job completed");
+  });
+
+  renderWorker.on("failed", (job, err) => {
+    log("error", "render", job?.id, `Job failed: ${err.message}`);
+  });
+
+  renderWorker.on("error", (err) => {
+    log("error", "render", undefined, `Worker error: ${err.message}`);
+  });
+
+  console.log("[worker] Workers started successfully");
+
+  // Graceful shutdown
+  const shutdown = async () => {
+    console.log("Shutting down workers...");
+    await normalizeWorker.close();
+    await renderWorker.close();
+    process.exit(0);
+  };
+
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 })();
-
-const normalizeWorker = new Worker("normalize", processNormalize, {
-  connection: redisConn,
-  concurrency: 1,
-  lockDuration: NORMALIZE_TIMEOUT_MS,
-});
-
-const renderWorker = new Worker("render", processRender, {
-  connection: redisConn,
-  concurrency: 4,
-  lockDuration: RENDER_TIMEOUT_MS,
-});
-
-normalizeWorker.on("completed", (job) => {
-  log("info", "normalize", job.id, "Job completed");
-});
-
-normalizeWorker.on("failed", (job, err) => {
-  log("error", "normalize", job?.id, `Job failed: ${err.message}`);
-});
-
-normalizeWorker.on("error", (err) => {
-  log("error", "normalize", undefined, `Worker error: ${err.message}`);
-});
-
-renderWorker.on("completed", (job) => {
-  log("info", "render", job.id, "Job completed");
-});
-
-renderWorker.on("failed", (job, err) => {
-  log("error", "render", job?.id, `Job failed: ${err.message}`);
-});
-
-renderWorker.on("error", (err) => {
-  log("error", "render", undefined, `Worker error: ${err.message}`);
-});
-
-// Graceful shutdown
-process.on("SIGTERM", async () => {
-  console.log("Shutting down workers...");
-  await normalizeWorker.close();
-  await renderWorker.close();
-  process.exit(0);
-});
-
-process.on("SIGINT", async () => {
-  console.log("Shutting down workers...");
-  await normalizeWorker.close();
-  await renderWorker.close();
-  process.exit(0);
-});
 
 console.log("Workers running. Waiting for jobs...");
