@@ -34,6 +34,7 @@ import type { Database } from "@/lib/supabase/types";
 
 type Project = Database["public"]["Tables"]["projects"]["Row"];
 type Segment = Database["public"]["Tables"]["segments"]["Row"];
+type Variant = Database["public"]["Tables"]["variants"]["Row"];
 
 export async function POST(
   _req: NextRequest,
@@ -152,7 +153,8 @@ export async function POST(
         .eq("status", "pending");
 
       if (newVariants) {
-        for (const v of newVariants) {
+        const typedVariants = newVariants as Variant[];
+        for (const v of typedVariants) {
           const hook = segmentMap.get(v.hook_segment_id);
           const body = segmentMap.get(v.body_segment_id);
           const cta = segmentMap.get(v.cta_segment_id);
