@@ -28,7 +28,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateCombinations } from "@/lib/variant/combinations";
-import { enqueueNormalize } from "@/lib/queue/jobs";
+import { enqueueNormalize, enqueueRender } from "@/lib/queue/jobs";
 import { handleApiError, errorResponse } from "@/lib/utils/errors";
 import type { Database } from "@/lib/supabase/types";
 
@@ -140,10 +140,47 @@ export async function POST(
       });
     }
 
-    // If all segments are already normalized, immediately enqueue render jobs
+    // If all segments are already normalized, enqueue render jobs directly
+    // (normally the worker does this after the last normalize job completes,
+    // but on retry all segments may already be normalized)
     if (toNormalize.length === 0) {
-      // All segments already normalized — enqueue renders directly
-      // This would be handled by the worker normally, but we handle the edge case
+      const segmentMap = new Map(typedSegments.map((s) => [s.id, s]));
+      const { data: newVariants } = await admin
+        .from("variants")
+        .select("*")
+        .eq("project_id", projectId)
+        .eq("status", "pending");
+
+      if (newVariants) {
+        for (const v of newVariants) {
+          const hook = segmentMap.get(v.hook_segment_id);
+          const body = segmentMap.get(v.body_segment_id);
+          const cta = segmentMap.get(v.cta_segment_id);
+
+          if (!hook?.normalized_storage_key || !body?.normalized_storage_key || !cta?.normalized_storage_key) {
+            continue;
+          }
+
+          await admin.from("processing_jobs").insert({
+            project_id: projectId,
+            job_type: "render",
+            target_id: v.id,
+            status: "queued",
+          });
+
+          await enqueueRender({
+            projectId,
+            variantId: v.id,
+            hookSegmentId: v.hook_segment_id,
+            bodySegmentId: v.body_segment_id,
+            ctaSegmentId: v.cta_segment_id,
+            hookNormalizedKey: hook.normalized_storage_key,
+            bodyNormalizedKey: body.normalized_storage_key,
+            ctaNormalizedKey: cta.normalized_storage_key,
+            hookDurationMs: hook.normalized_duration_ms!,
+          });
+        }
+      }
     }
 
     return NextResponse.json({
