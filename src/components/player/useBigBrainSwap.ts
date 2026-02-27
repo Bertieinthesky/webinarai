@@ -52,7 +52,6 @@ interface UseBigBrainSwapOptions {
 export function useBigBrainSwap({
   hookClipUrl,
   fullVideoUrl,
-  hookEndTimeMs,
   onPlay,
   onProgress,
   onComplete,
