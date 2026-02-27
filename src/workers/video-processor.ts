@@ -114,6 +114,18 @@ function validateEnv(): void {
 validateEnv();
 
 // ──────────────────────────────────────────
+// Health check server — start FIRST so Railway sees the port immediately
+// ──────────────────────────────────────────
+
+const PORT = parseInt(process.env.PORT || "3001", 10);
+createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ status: "ok" }));
+}).listen(PORT, () => {
+  console.log(`[worker] Health check listening on port ${PORT}`);
+});
+
+// ──────────────────────────────────────────
 // Initialize clients
 // ──────────────────────────────────────────
 
@@ -687,16 +699,6 @@ process.on("SIGINT", async () => {
   await normalizeWorker.close();
   await renderWorker.close();
   process.exit(0);
-});
-
-// Health check server — Railway expects a listening port for web services.
-// This keeps the container alive and provides a /health endpoint for monitoring.
-const PORT = parseInt(process.env.PORT || "3001", 10);
-createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ status: "ok", workers: { normalize: 2, render: 4 } }));
-}).listen(PORT, () => {
-  console.log(`[worker] Health check listening on port ${PORT}`);
 });
 
 console.log("Workers running. Waiting for jobs...");
