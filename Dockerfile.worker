@@ -1,9 +1,10 @@
 FROM node:20-slim
 
-# Install FFmpeg
+# Install FFmpeg and set path explicitly for execFile()
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg && \
     rm -rf /var/lib/apt/lists/*
+ENV FFMPEG_PATH=/usr/bin/ffmpeg
 
 WORKDIR /app
 
