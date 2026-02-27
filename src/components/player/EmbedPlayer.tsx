@@ -169,35 +169,7 @@ export function EmbedPlayer({
         </div>
       )}
 
-      {/* Loading spinner during swap */}
-      {phase === "swapping" && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <div
-            style={{
-              width: 40,
-              height: 40,
-              border: "3px solid rgba(255,255,255,0.3)",
-              borderTopColor: "#fff",
-              borderRadius: "50%",
-              animation: "wai-spin 0.8s linear infinite",
-            }}
-          />
-        </div>
-      )}
-
-      <style>{`
-        @keyframes wai-spin {
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
+      {/* No spinner during swap — the hook's last frame stays visible until full video is ready */}
     </div>
   );
 }

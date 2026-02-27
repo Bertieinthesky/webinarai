@@ -179,8 +179,8 @@ export default function ProjectDetailPage() {
         ))}
       </div>
 
-      {/* Retry banner for failures or stuck processing */}
-      {(hasFailures || project.status === "processing") && (
+      {/* Retry banner — only shown when there are actual failures */}
+      {hasFailures && (
         <Card className="border-red-500/20 bg-red-500/5">
           <CardContent className="flex items-center justify-between p-4">
             <div className="flex items-center gap-3">
@@ -191,15 +191,9 @@ export default function ProjectDetailPage() {
               </div>
               <div>
                 <p className="text-sm font-medium text-red-400">
-                  {hasFailures ? (
-                    <>
-                      {failedSegments.length > 0 && `${failedSegments.length} segment${failedSegments.length > 1 ? "s" : ""} failed`}
-                      {failedSegments.length > 0 && failedVariants.length > 0 && " · "}
-                      {failedVariants.length > 0 && `${failedVariants.length} variant${failedVariants.length > 1 ? "s" : ""} failed`}
-                    </>
-                  ) : (
-                    "Processing appears stuck"
-                  )}
+                  {failedSegments.length > 0 && `${failedSegments.length} segment${failedSegments.length > 1 ? "s" : ""} failed`}
+                  {failedSegments.length > 0 && failedVariants.length > 0 && " · "}
+                  {failedVariants.length > 0 && `${failedVariants.length} variant${failedVariants.length > 1 ? "s" : ""} failed`}
                 </p>
                 <p className="mt-0.5 text-xs text-red-400/70">
                   {failedSegments[0]?.error_message || failedVariants[0]?.error_message || "Reset to draft and try again"}
