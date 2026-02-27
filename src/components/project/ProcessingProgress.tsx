@@ -154,7 +154,6 @@ export function ProcessingProgress({
 
   const statusBadge = (
     status: string,
-    _type: "segment" | "variant"
   ) => {
     const colors: Record<string, string> = {
       uploaded: "bg-zinc-700 text-zinc-400",
@@ -268,7 +267,7 @@ export function ProcessingProgress({
                       <div className="h-full w-full animate-pulse rounded-full bg-blue-500" />
                     </div>
                   )}
-                  {statusBadge(seg.status, "segment")}
+                  {statusBadge(seg.status)}
                 </div>
               </div>
             ))}
@@ -322,7 +321,7 @@ export function ProcessingProgress({
                         <div className="h-full w-full animate-pulse rounded-full bg-yellow-500" />
                       </div>
                     )}
-                    {statusBadge(v.status, "variant")}
+                    {statusBadge(v.status)}
                   </div>
                 </div>
               ))}
