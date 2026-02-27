@@ -625,14 +625,17 @@ async function checkProjectComplete(projectId: string) {
 
 console.log("Starting webinar.ai video processing workers...");
 
+const redisConn = getRedisConnection();
+console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${!!redisConn.tls})`);
+
 const normalizeWorker = new Worker("normalize", processNormalize, {
-  connection: getRedisConnection(),
+  connection: redisConn,
   concurrency: 2,
   lockDuration: NORMALIZE_TIMEOUT_MS,
 });
 
 const renderWorker = new Worker("render", processRender, {
-  connection: getRedisConnection(),
+  connection: redisConn,
   concurrency: 4,
   lockDuration: RENDER_TIMEOUT_MS,
 });
