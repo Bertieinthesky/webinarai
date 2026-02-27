@@ -16,8 +16,11 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useSmartSync } from "./useSmartSync";
+
+// Version tag — check browser console or inspect data-wai-version to verify deploy
+const WAI_VERSION = "smartsync-2.1";
 
 interface SmartSyncPlayerProps {
   hookClipUrl: string;
@@ -37,6 +40,14 @@ export function SmartSyncPlayer({
   projectSlug,
 }: SmartSyncPlayerProps) {
   const [hasInteracted, setHasInteracted] = useState(false);
+
+  useEffect(() => {
+    console.log(
+      `%c[webinar.ai]%c SmartSync ${WAI_VERSION} | early-swap + micro-crossfade + RVFC`,
+      "color: #6366f1; font-weight: bold",
+      "color: inherit"
+    );
+  }, []);
 
   const { hookRef, fullRef, phase, togglePlay } =
     useSmartSync({
@@ -66,6 +77,7 @@ export function SmartSyncPlayer({
   return (
     <div
       className="wai-player-container"
+      data-wai-version={WAI_VERSION}
       style={{
         position: "relative",
         width: "100%",
