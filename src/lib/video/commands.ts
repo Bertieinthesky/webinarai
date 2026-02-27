@@ -69,6 +69,7 @@ export async function runFFmpeg(
     const result = await execFileAsync(getFFmpegPath(), args, {
       maxBuffer: 50 * 1024 * 1024, // 50MB buffer — FFmpeg can produce verbose output
       timeout: timeoutMs,
+      env: process.env,
     });
     return { stdout: result.stdout, stderr: result.stderr };
   } catch (error: unknown) {
@@ -91,6 +92,7 @@ export async function runFFprobe(args: string[]): Promise<ExecResult> {
     const result = await execFileAsync(getFFprobePath(), args, {
       maxBuffer: 10 * 1024 * 1024,
       timeout: 30_000, // 30 seconds — probing should be near-instant
+      env: process.env,
     });
     return { stdout: result.stdout, stderr: result.stderr };
   } catch (error: unknown) {

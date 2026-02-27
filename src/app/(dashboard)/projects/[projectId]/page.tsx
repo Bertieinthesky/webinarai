@@ -87,6 +87,32 @@ export default function ProjectDetailPage() {
     load();
   }, [load]);
 
+  // Real-time subscription: reload when segments or variants change status
+  useEffect(() => {
+    const channel = supabase
+      .channel(`project-${projectId}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "segments", filter: `project_id=eq.${projectId}` },
+        () => load()
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "variants", filter: `project_id=eq.${projectId}` },
+        () => load()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "projects", filter: `id=eq.${projectId}` },
+        () => load()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [projectId, supabase, load]);
+
   if (loading) {
     return (
       <div className="space-y-4">

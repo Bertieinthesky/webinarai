@@ -60,7 +60,18 @@ export async function POST(
       return errorResponse("Project is already processing or complete");
     }
 
-    // Get all uploaded segments
+    // Reset any previously-failed segments so they can be re-processed
+    await admin
+      .from("segments")
+      .update({ status: "uploaded", error_message: null })
+      .eq("project_id", projectId)
+      .eq("status", "failed");
+
+    // Delete old variants and processing jobs from prior runs
+    await admin.from("variants").delete().eq("project_id", projectId);
+    await admin.from("processing_jobs").delete().eq("project_id", projectId);
+
+    // Get all segments ready for processing
     const { data: segments, error: segError } = await admin
       .from("segments")
       .select("*")
