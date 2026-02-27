@@ -50,6 +50,12 @@ export async function stitchSegments(
     concatListPath,
     "-c",
     "copy",
+    // Fix timestamp discontinuities at segment boundaries that cause
+    // brief loading spinners in browser video players
+    "-fflags",
+    "+genpts",
+    "-avoid_negative_ts",
+    "make_zero",
     "-movflags",
     "+faststart",
     "-y",
