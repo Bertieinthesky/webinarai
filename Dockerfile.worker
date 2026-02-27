@@ -8,8 +8,10 @@ RUN apt-get update && \
 WORKDIR /app
 
 # Copy package files and install dependencies
+# Remove dotenv after install — v17 auto-patches process.env on load,
+# which shadows Railway-injected env vars. Worker doesn't need it.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm install tsx
+RUN npm ci --omit=dev && npm install tsx && npm uninstall dotenv
 
 # Copy source code
 COPY src/ ./src/
