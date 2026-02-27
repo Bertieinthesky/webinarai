@@ -94,9 +94,13 @@ export function useSmartSync({
     swappedRef.current = false;
     syncActiveRef.current = false;
 
-    // Set initial z-index via DOM (hook on top, full underneath)
+    // Set initial z-index and opacity via DOM (hook on top, full underneath)
     hook.style.zIndex = "2";
+    hook.style.opacity = "1";
+    hook.style.transition = "";
     full.style.zIndex = "1";
+    full.style.opacity = "1";
+    full.style.transition = "";
 
     // Set sources — both start at 0:00
     hook.src = hookClipUrl;
@@ -111,7 +115,9 @@ export function useSmartSync({
     setPhase("loading");
   }, [hookClipUrl, fullVideoUrl]);
 
-  // Hook ended → swap to full video
+  // Swap function — extracted so it can be called from RVFC (early) or ended (fallback)
+  const doSwapRef = useRef<(() => void) | null>(null);
+
   useEffect(() => {
     const hook = hookRef.current;
     const full = fullRef.current;
@@ -142,12 +148,25 @@ export function useSmartSync({
       // === CRITICAL: All swap mutations must be synchronous ===
       // Direct DOM manipulation ensures visual + audio swap happen
       // in the SAME JS execution frame, before the browser paints.
-      // React state updates are async and would cause a 1-frame gap.
+
+      // Micro-crossfade: briefly show both at full opacity with the full
+      // video on top. The 80ms transition masks any sub-frame visual
+      // difference between the two encodings.
+      full.style.transition = "opacity 0.08s";
+      hook.style.transition = "opacity 0.08s";
       full.style.zIndex = "3";
+      full.style.opacity = "1";
       hook.style.zIndex = "0";
+
+      // Audio swap
       full.muted = false;
       hook.muted = true;
-      hook.pause();
+
+      // Fade out hook after crossfade completes
+      setTimeout(() => {
+        hook.style.opacity = "0";
+        hook.pause();
+      }, 80);
 
       // React state update for UI consistency (NOT for the swap itself)
       setPhase("playing_full");
@@ -156,6 +175,9 @@ export function useSmartSync({
       }
     };
 
+    doSwapRef.current = doSwap;
+
+    // Fallback: if RVFC early-swap didn't trigger, swap on ended
     hook.addEventListener("ended", doSwap);
     return () => hook.removeEventListener("ended", doSwap);
   }, []);
@@ -222,6 +244,20 @@ export function useSmartSync({
       const onHookFrame = (_now: number, metadata: VideoFrameCallbackMetadata) => {
         hookMediaTimeRef.current = metadata.mediaTime;
         correctDrift();
+
+        // Early swap: trigger 150ms BEFORE hook ends to avoid the
+        // ended-state frame artifact. At this point both videos are
+        // still actively playing the same content — swap is invisible.
+        if (
+          hook.duration > 0 &&
+          metadata.mediaTime >= hook.duration - 0.15 &&
+          !swappedRef.current &&
+          doSwapRef.current
+        ) {
+          doSwapRef.current();
+          return; // Don't schedule another frame callback
+        }
+
         if (syncActiveRef.current) {
           hookRvfcHandle.current = hook.requestVideoFrameCallback(onHookFrame);
         }
@@ -255,6 +291,17 @@ export function useSmartSync({
       driftIntervalRef.current = setInterval(() => {
         if (!syncActiveRef.current) return;
         if (hook.paused || full.paused) return;
+
+        // Early swap: trigger 150ms before hook ends (same as RVFC path)
+        if (
+          hook.duration > 0 &&
+          hook.currentTime >= hook.duration - 0.15 &&
+          !swappedRef.current &&
+          doSwapRef.current
+        ) {
+          doSwapRef.current();
+          return;
+        }
 
         const drift = hook.currentTime - full.currentTime;
 
@@ -408,9 +455,13 @@ export function useSmartSync({
       full.currentTime = 0;
       full.muted = true;
       hook.muted = false;
-      // Reset z-index via DOM for replay
+      // Reset z-index and opacity via DOM for replay
       hook.style.zIndex = "2";
+      hook.style.opacity = "1";
+      hook.style.transition = "";
       full.style.zIndex = "1";
+      full.style.opacity = "1";
+      full.style.transition = "";
 
       hook.play();
       full.play();
