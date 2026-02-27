@@ -4,6 +4,11 @@
  * PURPOSE:
  *   Provides the upload interface for a single segment type (hook, body, or CTA).
  *   Three of these are rendered side-by-side on the upload page, one per type.
+ *
+ * UPLOAD STRATEGY:
+ *   Direct browser-to-R2 uploads via presigned URLs. The API creates a segment
+ *   record and returns a presigned PUT URL. The browser uploads directly to R2
+ *   using XHR (for progress tracking). No file size limits.
  */
 
 "use client";
@@ -31,7 +36,6 @@ interface UploadState {
   error?: string;
   label: string;
   segmentId?: string;
-  xhr?: XMLHttpRequest;
 }
 
 const typeConfig = {
@@ -95,6 +99,7 @@ export function SegmentUploader({
         setUploads((prev) => [...prev, uploadState]);
 
         try {
+          // 1. Create segment record — API returns presigned R2 upload URL
           const segmentRes = await fetch(
             `/api/projects/${projectId}/segments`,
             {
@@ -111,7 +116,7 @@ export function SegmentUploader({
           );
 
           if (!segmentRes.ok) throw new Error("Failed to create segment");
-          const { segment } = await segmentRes.json();
+          const { segment, uploadUrl } = await segmentRes.json();
 
           setUploads((prev) =>
             prev.map((u) =>
@@ -119,7 +124,7 @@ export function SegmentUploader({
             )
           );
 
-          const proxyUrl = `/api/projects/${projectId}/upload?key=${encodeURIComponent(segment.original_storage_key)}&contentType=${encodeURIComponent(file.type)}`;
+          // 2. Upload directly to R2 via presigned URL (XHR for progress)
           await new Promise<void>((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             xhrMap.current.set(file, xhr);
@@ -139,21 +144,28 @@ export function SegmentUploader({
               if (xhr.status >= 200 && xhr.status < 300) {
                 resolve();
               } else {
-                reject(new Error(`Upload failed: ${xhr.status}`));
+                reject(
+                  new Error(
+                    `Upload failed (${xhr.status}): ${xhr.responseText?.slice(0, 200) || "No response"}`
+                  )
+                );
               }
             });
             xhr.addEventListener("error", () => {
               xhrMap.current.delete(file);
-              reject(new Error("Upload failed"));
+              reject(new Error("Network error — check CORS configuration"));
             });
             xhr.addEventListener("abort", () => {
               xhrMap.current.delete(file);
               reject(new Error("Upload cancelled"));
             });
-            xhr.open("PUT", proxyUrl);
+
+            xhr.open("PUT", uploadUrl);
+            xhr.setRequestHeader("Content-Type", file.type);
             xhr.send(file);
           });
 
+          // 3. Mark segment as uploaded
           await fetch(
             `/api/projects/${projectId}/segments/${segment.id}`,
             {
@@ -165,19 +177,24 @@ export function SegmentUploader({
 
           setUploads((prev) =>
             prev.map((u) =>
-              u.file === file ? { ...u, status: "complete", progress: 100 } : u
+              u.file === file
+                ? { ...u, status: "complete", progress: 100 }
+                : u
             )
           );
 
           onUploadComplete();
         } catch (err) {
-          const message = err instanceof Error ? err.message : "Upload failed";
+          const message =
+            err instanceof Error ? err.message : "Upload failed";
           if (message === "Upload cancelled") {
             setUploads((prev) => prev.filter((u) => u.file !== file));
           } else {
             setUploads((prev) =>
               prev.map((u) =>
-                u.file === file ? { ...u, status: "error", error: message } : u
+                u.file === file
+                  ? { ...u, status: "error", error: message }
+                  : u
               )
             );
           }
@@ -234,7 +251,9 @@ export function SegmentUploader({
   }
 
   return (
-    <Card className={`border-border bg-card transition-colors ${dragOver ? config.borderActive : ""}`}>
+    <Card
+      className={`border-border bg-card transition-colors ${dragOver ? config.borderActive : ""}`}
+    >
       <CardHeader className="pb-3">
         <CardTitle className={`text-[15px] font-medium ${config.color}`}>
           {config.title}
@@ -261,7 +280,9 @@ export function SegmentUploader({
               </p>
             </div>
             <div className="ml-2 flex items-center gap-2">
-              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${statusBadge[seg.status] || statusBadge.uploaded}`}>
+              <span
+                className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${statusBadge[seg.status] || statusBadge.uploaded}`}
+              >
                 {seg.status}
               </span>
               <button
@@ -270,8 +291,18 @@ export function SegmentUploader({
                 className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
                 title="Remove segment"
               >
-                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                <svg
+                  className="h-3.5 w-3.5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M6 18L18 6M6 6l12 12"
+                  />
                 </svg>
               </button>
             </div>
@@ -300,8 +331,18 @@ export function SegmentUploader({
                       className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-400"
                       title="Cancel upload"
                     >
-                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      <svg
+                        className="h-3.5 w-3.5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M6 18L18 6M6 6l12 12"
+                        />
                       </svg>
                     </button>
                   ) : upload.status === "error" ? (
@@ -310,8 +351,18 @@ export function SegmentUploader({
                       className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                       title="Dismiss"
                     >
-                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      <svg
+                        className="h-3.5 w-3.5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M6 18L18 6M6 6l12 12"
+                        />
                       </svg>
                     </button>
                   ) : null}
@@ -335,9 +386,21 @@ export function SegmentUploader({
               : "border-border hover:border-muted-foreground/30 hover:bg-accent/50"
           }`}
         >
-          <div className={`mb-2.5 flex h-9 w-9 items-center justify-center rounded-lg ${config.iconBg}`}>
-            <svg className={`h-4 w-4 ${config.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+          <div
+            className={`mb-2.5 flex h-9 w-9 items-center justify-center rounded-lg ${config.iconBg}`}
+          >
+            <svg
+              className={`h-4 w-4 ${config.color}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.75}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"
+              />
             </svg>
           </div>
           <p className="text-sm text-foreground/70">
@@ -349,12 +412,14 @@ export function SegmentUploader({
                 accept="video/*"
                 multiple
                 className="hidden"
-                onChange={(e) => e.target.files && handleFiles(e.target.files)}
+                onChange={(e) =>
+                  e.target.files && handleFiles(e.target.files)
+                }
               />
             </label>
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            MP4, MOV, WebM — any resolution
+            MP4, MOV, WebM — any size, any resolution
           </p>
         </div>
       </CardContent>
