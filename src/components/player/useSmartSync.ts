@@ -172,6 +172,8 @@ export function useSmartSync({
       // Track each video's exact media presentation time on every frame.
       // Compare them and apply micro playbackRate corrections.
 
+      let initialSyncDone = false;
+
       const correctDrift = () => {
         if (!syncActiveRef.current) return;
 
@@ -182,6 +184,15 @@ export function useSmartSync({
         if (hookTime === 0 && fullTime === 0) return;
 
         const drift = hookTime - fullTime; // positive = full is behind
+
+        // Initial sync: if drift is large on first check (blob preload head start),
+        // force-seek the full video to match rather than slowly correcting
+        if (!initialSyncDone && Math.abs(drift) > 0.1) {
+          full.currentTime = hook.currentTime;
+          initialSyncDone = true;
+          return;
+        }
+        initialSyncDone = true;
 
         if (drift > 0.033) {
           // Full is >1 frame behind — speed up
@@ -322,11 +333,21 @@ export function useSmartSync({
       hook.currentTime = 0;
 
       // Play both — hook audio is what the viewer hears
-      const hookPlay = hook.play();
+      // Start full video first so it has a head start on buffering,
+      // then start hook. This compensates for blob-preloaded hooks
+      // that would otherwise race ahead of CDN-streamed full videos.
       const fullPlay = full.play();
+      const hookPlay = hook.play();
 
       Promise.all([hookPlay, fullPlay])
         .then(() => {
+          // Force-sync: if hook got ahead (blob preload), snap full video
+          // to match. At this early point (~0-500ms in), seeking is instant
+          // since the start of the video is always buffered first.
+          const drift = hook.currentTime - full.currentTime;
+          if (drift > 0.05) {
+            full.currentTime = hook.currentTime;
+          }
           setPhase("playing_hook");
           onPlay?.();
         })
