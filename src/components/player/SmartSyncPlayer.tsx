@@ -4,23 +4,14 @@
  * PURPOSE:
  *   The flagship player for webinar.ai. Uses parallel-playback architecture
  *   where BOTH the hook clip and full variant video play simultaneously from
- *   0:00. The hook plays visually with audio while the full video buffers
- *   hidden and muted. At swap time, it's just a visibility + audio toggle —
- *   zero seeking, zero glitch.
+ *   0:00. Both render at full opacity (so the browser decodes both actively).
+ *   The hook sits on top via z-index; at swap time, z-index flips and audio
+ *   toggles. Zero seeking, zero decoder throttling, zero glitch.
  *
- * WHY "AI SMART SYNC":
- *   The player intelligently synchronizes two video streams so the viewer
- *   perceives a single, instantly-loading video with no buffering gaps.
- *
- * VISUAL STATES:
- *   - Idle: Play button overlay on poster/black background
- *   - Playing hook: Hook clip visible, full video buffering hidden
- *   - Playing full: Full video visible, hook clip stopped
- *   - Ended: Full video shows last frame
- *
- * ARCHITECTURE:
- *   - Uses: useBigBrainSwap hook for parallel-playback state management
- *   - Same interface as EmbedPlayer (drop-in replacement)
+ * KEY: Z-INDEX NOT OPACITY
+ *   Using opacity:0 causes browsers to throttle the hidden video's decoder.
+ *   With z-index stacking, both videos are "visible" to the browser, so both
+ *   get full decoder priority. The hook simply covers the full video visually.
  */
 
 "use client";
@@ -47,7 +38,7 @@ export function SmartSyncPlayer({
 }: SmartSyncPlayerProps) {
   const [hasInteracted, setHasInteracted] = useState(false);
 
-  const { hookRef, fullRef, phase, togglePlay, showHook, showFull } =
+  const { hookRef, fullRef, phase, togglePlay, hookOnTop } =
     useBigBrainSwap({
       hookClipUrl,
       fullVideoUrl,
@@ -86,24 +77,7 @@ export function SmartSyncPlayer({
       }}
       onClick={handleClick}
     >
-      {/* Hook clip player — visible during hook phase */}
-      <video
-        ref={hookRef}
-        playsInline
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          width: "100%",
-          height: "100%",
-          objectFit: "contain",
-          opacity: showHook ? 1 : 0,
-          pointerEvents: showHook ? "auto" : "none",
-          transition: "opacity 0.05s",
-        }}
-      />
-
-      {/* Full variant video — plays hidden/muted until swap */}
+      {/* Full variant video — plays underneath during hook, on top after swap */}
       <video
         ref={fullRef}
         playsInline
@@ -114,18 +88,32 @@ export function SmartSyncPlayer({
           width: "100%",
           height: "100%",
           objectFit: "contain",
-          opacity: showFull ? 1 : 0,
-          pointerEvents: showFull ? "auto" : "none",
-          transition: "opacity 0.05s",
+          zIndex: hookOnTop ? 1 : 3,
         }}
       />
 
-      {/* Play button overlay */}
+      {/* Hook clip player — sits on top during hook phase */}
+      <video
+        ref={hookRef}
+        playsInline
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: "100%",
+          height: "100%",
+          objectFit: "contain",
+          zIndex: hookOnTop ? 2 : 0,
+        }}
+      />
+
+      {/* Play button overlay — always on top */}
       {(phase === "idle" || (!hasInteracted && phase === "loading")) && (
         <div
           style={{
             position: "absolute",
             inset: 0,
+            zIndex: 10,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",

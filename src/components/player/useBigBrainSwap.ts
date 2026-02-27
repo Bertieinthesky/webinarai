@@ -4,21 +4,19 @@
  * PURPOSE:
  *   Eliminates the hook-to-body swap glitch by playing BOTH videos from 0:00
  *   simultaneously. The hook clip plays visually with audio while the full
- *   variant video plays hidden and muted in the background. When the hook
- *   ends, swap is just a visibility + audio toggle — no seeking needed.
+ *   variant video plays underneath (same opacity, lower z-index). When the
+ *   hook ends, swap is just a z-index flip + audio toggle — no seeking needed.
  *
- * WHY THIS WORKS:
- *   The smart player's glitch comes from seeking the full video to the swap
- *   point. Even with pre-seeking, keyframe alignment and buffering can cause
- *   1-2 second stalls. By playing the full video from 0:00 in parallel, it
- *   naturally reaches the swap point at exactly the right time — because
- *   both videos started together.
+ * KEY INSIGHT — Z-INDEX NOT OPACITY:
+ *   Using opacity:0 to "hide" the full video causes browsers to throttle its
+ *   decoder, so frames aren't ready at swap time. Instead, both videos render
+ *   at opacity:1 and the hook simply sits ON TOP via z-index. The browser
+ *   actively decodes both because both are "visible." Swap = flip z-index.
  *
- * TRADEOFFS:
- *   + Zero-glitch swap (no seeking = no stall)
- *   + Works WITH the browser instead of fighting it
- *   - Uses ~2x bandwidth during hook playback (both videos streaming)
- *   - Slightly higher memory usage (two active decoders)
+ * DRIFT CORRECTION:
+ *   If the full video stalls (buffering on slow connections), it may fall
+ *   behind the hook. We monitor drift every 500ms and if the full video is
+ *   >300ms behind, we briefly bump its playbackRate to 1.05x to catch up.
  *
  * STATE MACHINE:
  *   idle → loading → playing_hook → playing_full → ended
@@ -62,11 +60,12 @@ export function useBigBrainSwap({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const swappedRef = useRef(false);
+  const driftIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null
   );
 
-  // Active player is whichever is currently visible
+  // Active player is whichever is currently on top
   const activeRef = useMemo(
     () => (phase === "playing_full" || phase === "ended" ? fullRef : hookRef),
     [phase]
@@ -95,20 +94,6 @@ export function useBigBrainSwap({
     setPhase("loading");
   }, [hookClipUrl, fullVideoUrl]);
 
-  // When hook can play → mark as ready (but don't autoplay)
-  useEffect(() => {
-    const hook = hookRef.current;
-    if (!hook || phase !== "loading") return;
-
-    const handleCanPlay = () => {
-      // Stay in loading — user must click to play
-      // But if we came from a togglePlay call, start playing
-    };
-
-    hook.addEventListener("canplay", handleCanPlay);
-    return () => hook.removeEventListener("canplay", handleCanPlay);
-  }, [phase]);
-
   // Hook ended → swap to full video
   useEffect(() => {
     const hook = hookRef.current;
@@ -119,7 +104,16 @@ export function useBigBrainSwap({
       if (swappedRef.current) return;
       swappedRef.current = true;
 
-      // Unmute full video, mute hook
+      // Stop drift correction
+      if (driftIntervalRef.current) {
+        clearInterval(driftIntervalRef.current);
+        driftIntervalRef.current = null;
+      }
+
+      // Reset playback rate in case drift correction bumped it
+      full.playbackRate = 1.0;
+
+      // Unmute full video, mute + pause hook
       full.muted = false;
       hook.muted = true;
       hook.pause();
@@ -138,6 +132,42 @@ export function useBigBrainSwap({
       hook.removeEventListener("ended", doSwap);
     };
   }, []);
+
+  // Drift correction: keep full video in sync with hook during parallel playback
+  useEffect(() => {
+    if (phase !== "playing_hook") {
+      if (driftIntervalRef.current) {
+        clearInterval(driftIntervalRef.current);
+        driftIntervalRef.current = null;
+      }
+      return;
+    }
+
+    driftIntervalRef.current = setInterval(() => {
+      const hook = hookRef.current;
+      const full = fullRef.current;
+      if (!hook || !full || hook.paused || full.paused) return;
+
+      const drift = hook.currentTime - full.currentTime;
+
+      if (drift > 0.3) {
+        // Full video is behind — speed it up slightly to catch up
+        full.playbackRate = 1.05;
+      } else if (drift < -0.3) {
+        // Full video is ahead — slow it down slightly
+        full.playbackRate = 0.95;
+      } else if (full.playbackRate !== 1.0) {
+        // Back in sync — normalize
+        full.playbackRate = 1.0;
+      }
+    }, 500);
+
+    return () => {
+      if (driftIntervalRef.current) {
+        clearInterval(driftIntervalRef.current);
+      }
+    };
+  }, [phase]);
 
   // Track current time and progress milestones
   useEffect(() => {
@@ -195,11 +225,11 @@ export function useBigBrainSwap({
       // First click: start BOTH videos simultaneously
       swappedRef.current = false;
 
-      // Full video plays muted and hidden from 0:00
+      // Full video plays muted underneath from 0:00
       full.muted = true;
       full.currentTime = 0;
 
-      // Hook plays with audio and visible
+      // Hook plays with audio on top
       hook.currentTime = 0;
 
       // Play both — hook audio is what the viewer hears
@@ -278,7 +308,7 @@ export function useBigBrainSwap({
     duration,
     togglePlay,
     isPlaying: phase === "playing_hook" || phase === "playing_full",
-    showHook: phase !== "playing_full" && phase !== "ended",
-    showFull: phase === "playing_full" || phase === "ended",
+    // Z-index based: hook is on top during hook phase, full on top after swap
+    hookOnTop: phase !== "playing_full" && phase !== "ended",
   };
 }
