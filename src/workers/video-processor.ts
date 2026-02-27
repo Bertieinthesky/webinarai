@@ -15,7 +15,9 @@
  *
  * JOB TYPES:
  *   1. NORMALIZE — Re-encode an uploaded segment to standard specs
- *      - Downloads original from R2 → probes metadata → runs FFmpeg normalize
+ *      - Downloads original from R2 → probes metadata → checks if normalization needed
+ *      - If specs already match: remux with faststart only (near-instant)
+ *      - If specs differ: full FFmpeg normalize (minutes for long videos)
  *      - Uploads normalized file back to R2
  *      - When ALL segments for a project are normalized, automatically
  *        enqueues render jobs for every variant combination
@@ -38,7 +40,7 @@
  *
  * HOW TO RUN:
  *   Development:  npm run worker (or: npx tsx src/workers/video-processor.ts)
- *   Production:   Deploy to a dedicated VM (Railway, Render, EC2) with FFmpeg installed
+ *   Production:   Deploy to Railway with Dockerfile.worker (FFmpeg installed)
  *
  * ARCHITECTURE:
  *   Next.js API (POST /api/projects/[id]/process)
@@ -57,7 +59,7 @@ dotenv.config({ path: ".env.local" });
 dotenv.config();
 import { Worker, Job } from "bullmq";
 import { createClient } from "@supabase/supabase-js";
-import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { mkdir, writeFile, readFile, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -65,8 +67,9 @@ import { normalizeVideo } from "../lib/video/normalize";
 import { stitchSegments } from "../lib/video/stitch";
 import { extractHookClip } from "../lib/video/extract-hook";
 import { probeVideo } from "../lib/video/ffprobe";
-import { DEFAULT_SPEC } from "../lib/video/specs";
+import { DEFAULT_SPEC, needsNormalization } from "../lib/video/specs";
 import { extractPosterFrame } from "../lib/video/extract-poster";
+import { runFFmpeg } from "../lib/video/commands";
 import { normalizedSegmentKey, variantVideoKey, variantHookClipKey, variantPosterKey } from "../lib/storage/keys";
 import { getRedisConnection } from "../lib/queue/connection";
 import type { NormalizeJobData, RenderJobData } from "../lib/queue/types";
@@ -76,7 +79,35 @@ type Project = Database["public"]["Tables"]["projects"]["Row"];
 type Segment = Database["public"]["Tables"]["segments"]["Row"];
 type Variant = Database["public"]["Tables"]["variants"]["Row"];
 
+// ──────────────────────────────────────────
+// Startup validation
+// ──────────────────────────────────────────
+
+const REQUIRED_ENV = [
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "R2_ACCOUNT_ID",
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
+  "R2_BUCKET_NAME",
+  "REDIS_URL",
+] as const;
+
+function validateEnv(): void {
+  const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
+  if (missing.length > 0) {
+    console.error(`[worker] Missing required environment variables: ${missing.join(", ")}`);
+    process.exit(1);
+  }
+  console.log("[worker] Environment validated. All required vars present.");
+}
+
+validateEnv();
+
+// ──────────────────────────────────────────
 // Initialize clients
+// ──────────────────────────────────────────
+
 const supabase = createClient<Database>(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -95,6 +126,36 @@ const r2 = new S3Client({
 });
 
 const BUCKET = process.env.R2_BUCKET_NAME!;
+
+// Job timeout: 45 minutes for normalize (long videos), 10 minutes for render (stream-copy)
+const NORMALIZE_TIMEOUT_MS = 45 * 60 * 1000;
+const RENDER_TIMEOUT_MS = 10 * 60 * 1000;
+
+// ──────────────────────────────────────────
+// Helper: Structured logging with timing
+// ──────────────────────────────────────────
+
+function log(
+  level: "info" | "error" | "warn",
+  jobType: string,
+  jobId: string | undefined,
+  message: string,
+  extra?: Record<string, unknown>
+) {
+  const entry = {
+    ts: new Date().toISOString(),
+    level,
+    job: jobType,
+    jobId: jobId || "unknown",
+    msg: message,
+    ...extra,
+  };
+  if (level === "error") {
+    console.error(JSON.stringify(entry));
+  } else {
+    console.log(JSON.stringify(entry));
+  }
+}
 
 // ──────────────────────────────────────────
 // Helper: Download from R2 to local file
@@ -134,12 +195,30 @@ async function uploadToR2(
 }
 
 // ──────────────────────────────────────────
+// Helper: Remux with faststart (no re-encoding)
+// Used when video already matches target specs
+// ──────────────────────────────────────────
+
+async function remuxWithFaststart(
+  inputPath: string,
+  outputPath: string
+): Promise<void> {
+  await runFFmpeg([
+    "-i", inputPath,
+    "-c", "copy",
+    "-movflags", "+faststart",
+    "-y", outputPath,
+  ]);
+}
+
+// ──────────────────────────────────────────
 // NORMALIZE WORKER
 // ──────────────────────────────────────────
 
 async function processNormalize(job: Job<NormalizeJobData>) {
   const { projectId, segmentId, originalStorageKey } = job.data;
   const workDir = join(tmpdir(), `wai-normalize-${job.id}`);
+  const startTime = Date.now();
 
   try {
     await mkdir(workDir, { recursive: true });
@@ -155,12 +234,12 @@ async function processNormalize(job: Job<NormalizeJobData>) {
 
     // Download original
     const inputPath = join(workDir, "input.mp4");
-    console.log(`[normalize] Downloading ${originalStorageKey}...`);
+    log("info", "normalize", job.id, `Downloading ${originalStorageKey}`);
     await downloadFromR2(originalStorageKey, inputPath);
     await job.updateProgress(20);
 
     // Probe metadata
-    console.log(`[normalize] Probing ${segmentId}...`);
+    log("info", "normalize", job.id, `Probing segment ${segmentId}`);
     const metadata = await probeVideo(inputPath);
 
     // Update segment with original metadata
@@ -198,10 +277,22 @@ async function processNormalize(job: Job<NormalizeJobData>) {
         }
       : DEFAULT_SPEC;
 
-    // Normalize
+    // Probe-first: check if normalization is actually needed
+    const check = needsNormalization(metadata, spec);
     const outputPath = join(workDir, "normalized.mp4");
-    console.log(`[normalize] Normalizing ${segmentId}...`);
-    await normalizeVideo(inputPath, outputPath, spec);
+
+    if (check.needed) {
+      log("info", "normalize", job.id, `Normalization required for ${segmentId}`, {
+        reasons: check.reasons,
+        durationMs: metadata.duration_ms,
+      });
+      await normalizeVideo(inputPath, outputPath, spec);
+    } else {
+      log("info", "normalize", job.id, `Specs match — remuxing only (skipping re-encode) for ${segmentId}`, {
+        durationMs: metadata.duration_ms,
+      });
+      await remuxWithFaststart(inputPath, outputPath);
+    }
     await job.updateProgress(70);
 
     // Probe normalized output
@@ -209,7 +300,7 @@ async function processNormalize(job: Job<NormalizeJobData>) {
 
     // Upload normalized
     const storageKey = normalizedSegmentKey(projectId, segmentId);
-    console.log(`[normalize] Uploading normalized to ${storageKey}...`);
+    log("info", "normalize", job.id, `Uploading normalized to ${storageKey}`);
     const sizeBytes = await uploadToR2(outputPath, storageKey);
     await job.updateProgress(90);
 
@@ -235,14 +326,33 @@ async function processNormalize(job: Job<NormalizeJobData>) {
       .eq("target_id", segmentId)
       .eq("job_type", "normalize");
 
+    await job.updateProgress(95);
+
+    // Clean up original upload from R2 (normalized version is now the source of truth)
+    if (originalStorageKey !== storageKey) {
+      log("info", "normalize", job.id, `Deleting original ${originalStorageKey}`);
+      await r2.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: originalStorageKey })).catch((err) => {
+        log("warn", "normalize", job.id, `Failed to delete original: ${err.message}`);
+      });
+    }
+
     await job.updateProgress(100);
 
     // Check if ALL segments for this project are normalized
     await checkAndEnqueueRenders(projectId);
 
-    console.log(`[normalize] Done: ${segmentId}`);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    log("info", "normalize", job.id, `Completed ${segmentId}`, {
+      elapsedSec: elapsed,
+      skippedReencode: !check.needed,
+      sizeBytes,
+    });
   } catch (error) {
-    console.error(`[normalize] Failed: ${segmentId}`, error);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    log("error", "normalize", job.id, `Failed ${segmentId}`, {
+      elapsedSec: elapsed,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
 
     await supabase
       .from("segments")
@@ -284,7 +394,7 @@ async function checkAndEnqueueRenders(projectId: string) {
   const allNormalized = segments.every((s) => s.status === "normalized");
   if (!allNormalized) return;
 
-  console.log(`[normalize] All segments normalized for project ${projectId}. Enqueueing renders...`);
+  log("info", "normalize", undefined, `All segments normalized for project ${projectId}. Enqueueing renders...`);
 
   // Get pending variants
   const { data: rawVariants } = await supabase
@@ -308,7 +418,7 @@ async function checkAndEnqueueRenders(projectId: string) {
     const cta = segmentMap.get(variant.cta_segment_id);
 
     if (!hook?.normalized_storage_key || !body?.normalized_storage_key || !cta?.normalized_storage_key) {
-      console.error(`[render] Missing normalized keys for variant ${variant.id}`);
+      log("error", "render", undefined, `Missing normalized keys for variant ${variant.id}`);
       continue;
     }
 
@@ -350,6 +460,7 @@ async function processRender(job: Job<RenderJobData>) {
     hookDurationMs,
   } = job.data;
   const workDir = join(tmpdir(), `wai-render-${job.id}`);
+  const startTime = Date.now();
 
   try {
     await mkdir(workDir, { recursive: true });
@@ -373,7 +484,7 @@ async function processRender(job: Job<RenderJobData>) {
     const bodyPath = join(workDir, "body.mp4");
     const ctaPath = join(workDir, "cta.mp4");
 
-    console.log(`[render] Downloading segments for variant ${variantId}...`);
+    log("info", "render", job.id, `Downloading segments for variant ${variantId}`);
     await Promise.all([
       downloadFromR2(hookNormalizedKey, hookPath),
       downloadFromR2(bodyNormalizedKey, bodyPath),
@@ -383,16 +494,16 @@ async function processRender(job: Job<RenderJobData>) {
 
     // Stitch segments
     const variantPath = join(workDir, "variant.mp4");
-    console.log(`[render] Stitching variant ${variantId}...`);
+    log("info", "render", job.id, `Stitching variant ${variantId}`);
     await stitchSegments([hookPath, bodyPath, ctaPath], variantPath, workDir);
     await job.updateProgress(50);
 
     // Extract hook clip + poster frame
     const hookClipPath = join(workDir, "hook-clip.mp4");
     const posterPath = join(workDir, "poster.jpg");
-    console.log(`[render] Extracting hook clip for variant ${variantId}...`);
+    log("info", "render", job.id, `Extracting hook clip for variant ${variantId}`);
     await extractHookClip(variantPath, hookClipPath, hookDurationMs);
-    console.log(`[render] Extracting poster frame for variant ${variantId}...`);
+    log("info", "render", job.id, `Extracting poster frame for variant ${variantId}`);
     await extractPosterFrame(variantPath, posterPath);
     await job.updateProgress(60);
 
@@ -402,19 +513,19 @@ async function processRender(job: Job<RenderJobData>) {
 
     // Upload variant video
     const videoKey = variantVideoKey(projectId, variantId);
-    console.log(`[render] Uploading variant video to ${videoKey}...`);
+    log("info", "render", job.id, `Uploading variant video to ${videoKey}`);
     const videoSize = await uploadToR2(variantPath, videoKey);
     await job.updateProgress(75);
 
     // Upload hook clip
     const hookClipKey = variantHookClipKey(projectId, variantId);
-    console.log(`[render] Uploading hook clip to ${hookClipKey}...`);
+    log("info", "render", job.id, `Uploading hook clip to ${hookClipKey}`);
     const hookClipSize = await uploadToR2(hookClipPath, hookClipKey);
     await job.updateProgress(85);
 
     // Upload poster frame
     const posterKey = variantPosterKey(projectId, variantId);
-    console.log(`[render] Uploading poster to ${posterKey}...`);
+    log("info", "render", job.id, `Uploading poster to ${posterKey}`);
     await uploadToR2(posterPath, posterKey, "image/jpeg");
     await job.updateProgress(90);
 
@@ -449,9 +560,18 @@ async function processRender(job: Job<RenderJobData>) {
     // Check if ALL variants rendered → mark project ready
     await checkProjectComplete(projectId);
 
-    console.log(`[render] Done: variant ${variantId}`);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    log("info", "render", job.id, `Completed variant ${variantId}`, {
+      elapsedSec: elapsed,
+      videoSizeBytes: videoSize,
+      durationMs: variantMeta.duration_ms,
+    });
   } catch (error) {
-    console.error(`[render] Failed: variant ${variantId}`, error);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    log("error", "render", job.id, `Failed variant ${variantId}`, {
+      elapsedSec: elapsed,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
 
     await supabase
       .from("variants")
@@ -492,7 +612,7 @@ async function checkProjectComplete(projectId: string) {
 
   const allRendered = variants.every((v) => v.status === "rendered");
   if (allRendered) {
-    console.log(`[render] All variants rendered for project ${projectId}. Marking ready.`);
+    log("info", "render", undefined, `All variants rendered for project ${projectId}. Marking ready.`);
     await supabase
       .from("projects")
       .update({ status: "ready" })
@@ -509,27 +629,29 @@ console.log("Starting webinar.ai video processing workers...");
 const normalizeWorker = new Worker("normalize", processNormalize, {
   connection: getRedisConnection(),
   concurrency: 2,
+  lockDuration: NORMALIZE_TIMEOUT_MS,
 });
 
 const renderWorker = new Worker("render", processRender, {
   connection: getRedisConnection(),
   concurrency: 4,
+  lockDuration: RENDER_TIMEOUT_MS,
 });
 
 normalizeWorker.on("completed", (job) => {
-  console.log(`[normalize] Job ${job.id} completed`);
+  log("info", "normalize", job.id, "Job completed");
 });
 
 normalizeWorker.on("failed", (job, err) => {
-  console.error(`[normalize] Job ${job?.id} failed:`, err.message);
+  log("error", "normalize", job?.id, `Job failed: ${err.message}`);
 });
 
 renderWorker.on("completed", (job) => {
-  console.log(`[render] Job ${job.id} completed`);
+  log("info", "render", job.id, "Job completed");
 });
 
 renderWorker.on("failed", (job, err) => {
-  console.error(`[render] Job ${job?.id} failed:`, err.message);
+  log("error", "render", job?.id, `Job failed: ${err.message}`);
 });
 
 // Graceful shutdown

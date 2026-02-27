@@ -57,6 +57,66 @@ export const DEFAULT_SPEC: NormalizationSpec = {
   level: "4.1",
 };
 
+/**
+ * Checks if a video's metadata already matches the target spec.
+ * If it matches, we can skip the expensive re-encoding step and just
+ * remux with faststart (near-instant vs minutes of encoding).
+ *
+ * Tolerances:
+ *   - FPS: within 0.5 (29.97 matches 30)
+ *   - Dimensions: exact match required
+ *   - Codecs: h264 matches libx264 target
+ *   - Audio: must exist, codec and sample rate must match
+ */
+export function needsNormalization(
+  metadata: {
+    width: number;
+    height: number;
+    fps: number;
+    video_codec: string;
+    audio_codec: string | null;
+    audio_sample_rate: number | null;
+    audio_channels: number | null;
+    has_audio: boolean;
+  },
+  spec: NormalizationSpec
+): { needed: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+
+  if (metadata.width !== spec.width || metadata.height !== spec.height) {
+    reasons.push(`resolution ${metadata.width}x${metadata.height} → ${spec.width}x${spec.height}`);
+  }
+
+  if (Math.abs(metadata.fps - spec.fps) > 0.5) {
+    reasons.push(`fps ${metadata.fps} → ${spec.fps}`);
+  }
+
+  // h264 is the codec name from ffprobe; libx264 is the encoder name
+  const codecMap: Record<string, string> = { libx264: "h264", libx265: "hevc" };
+  const targetCodecName = codecMap[spec.videoCodec] || spec.videoCodec;
+  if (metadata.video_codec !== targetCodecName) {
+    reasons.push(`video codec ${metadata.video_codec} → ${targetCodecName}`);
+  }
+
+  if (!metadata.has_audio) {
+    reasons.push("no audio track (will generate silent)");
+  } else {
+    const audioCodecMap: Record<string, string> = { aac: "aac", libopus: "opus" };
+    const targetAudioCodec = audioCodecMap[spec.audioCodec] || spec.audioCodec;
+    if (metadata.audio_codec !== targetAudioCodec) {
+      reasons.push(`audio codec ${metadata.audio_codec} → ${targetAudioCodec}`);
+    }
+    if (metadata.audio_sample_rate && metadata.audio_sample_rate !== spec.audioRate) {
+      reasons.push(`audio rate ${metadata.audio_sample_rate} → ${spec.audioRate}`);
+    }
+    if (metadata.audio_channels && metadata.audio_channels !== spec.audioChannels) {
+      reasons.push(`audio channels ${metadata.audio_channels} → ${spec.audioChannels}`);
+    }
+  }
+
+  return { needed: reasons.length > 0, reasons };
+}
+
 export function specFromProject(project: {
   target_width: number;
   target_height: number;

@@ -55,14 +55,15 @@ export interface ExecResult {
  * Execute an FFmpeg command with the given arguments.
  *
  * @param args - Array of CLI arguments (e.g., ["-i", "input.mp4", "-c:v", "libx264", "output.mp4"])
- * @param timeoutMs - Maximum execution time in milliseconds. Defaults to 10 minutes.
- *                    Normalization of a 60-minute VSL at 1080p typically takes 3-5 minutes.
+ * @param timeoutMs - Maximum execution time in milliseconds. Defaults to 30 minutes.
+ *                    Normalization of a 30-minute VSL at 1080p typically takes 5-15 minutes.
+ *                    Longer webinars (60-90 min) can take 15-25 minutes.
  * @returns stdout and stderr from the FFmpeg process
  * @throws Error with the full stderr output if the command fails
  */
 export async function runFFmpeg(
   args: string[],
-  timeoutMs = 600_000
+  timeoutMs = 1_800_000
 ): Promise<ExecResult> {
   try {
     const result = await execFileAsync(getFFmpegPath(), args, {
