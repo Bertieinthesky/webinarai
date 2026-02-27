@@ -648,12 +648,20 @@ normalizeWorker.on("failed", (job, err) => {
   log("error", "normalize", job?.id, `Job failed: ${err.message}`);
 });
 
+normalizeWorker.on("error", (err) => {
+  log("error", "normalize", undefined, `Worker error: ${err.message}`);
+});
+
 renderWorker.on("completed", (job) => {
   log("info", "render", job.id, "Job completed");
 });
 
 renderWorker.on("failed", (job, err) => {
   log("error", "render", job?.id, `Job failed: ${err.message}`);
+});
+
+renderWorker.on("error", (err) => {
+  log("error", "render", undefined, `Worker error: ${err.message}`);
 });
 
 // Graceful shutdown
