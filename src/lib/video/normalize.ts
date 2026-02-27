@@ -68,6 +68,8 @@ export async function normalizeVideo(
   args.push("-vf", videoFilter);
 
   // Video codec settings
+  // Limit threads to prevent OOM on containers (Railway defaults to all host cores)
+  args.push("-threads", "4");
   args.push(
     "-c:v",
     spec.videoCodec,
