@@ -1,5 +1,5 @@
 /**
- * useBigBrainSwap.ts — Parallel-playback dual-player hook (zero-seek swap)
+ * useSmartSync.ts — AI Smart Sync parallel-playback hook (zero-seek swap)
  *
  * PURPOSE:
  *   Eliminates the hook-to-body swap glitch by playing BOTH videos from 0:00
@@ -13,10 +13,12 @@
  *   at opacity:1 and the hook simply sits ON TOP via z-index. The browser
  *   actively decodes both because both are "visible." Swap = flip z-index.
  *
- * DRIFT CORRECTION:
- *   If the full video stalls (buffering on slow connections), it may fall
- *   behind the hook. We monitor drift every 500ms and if the full video is
- *   >300ms behind, we briefly bump its playbackRate to 1.05x to catch up.
+ * FRAME-LEVEL SYNC (requestVideoFrameCallback):
+ *   Uses the browser's requestVideoFrameCallback API to get exact media
+ *   presentation timestamps for each frame. Compares both videos' mediaTime
+ *   on every frame and applies micro playbackRate corrections if drift exceeds
+ *   33ms (~1 frame at 30fps). Falls back to 500ms interval polling for older
+ *   browsers that don't support the API.
  *
  * STATE MACHINE:
  *   idle → loading → playing_hook → playing_full → ended
@@ -29,7 +31,7 @@
 
 import { useRef, useState, useCallback, useEffect, useMemo } from "react";
 
-export type BigBrainPhase =
+export type SmartSyncPhase =
   | "idle"
   | "loading"
   | "playing_hook"
@@ -38,7 +40,7 @@ export type BigBrainPhase =
   | "ended"
   | "error";
 
-interface UseBigBrainSwapOptions {
+interface UseSmartSyncOptions {
   hookClipUrl: string;
   fullVideoUrl: string;
   hookEndTimeMs: number;
@@ -47,19 +49,29 @@ interface UseBigBrainSwapOptions {
   onComplete?: () => void;
 }
 
-export function useBigBrainSwap({
+// Check for requestVideoFrameCallback support
+function supportsRVFC(el: HTMLVideoElement): boolean {
+  return "requestVideoFrameCallback" in el;
+}
+
+export function useSmartSync({
   hookClipUrl,
   fullVideoUrl,
   onPlay,
   onProgress,
   onComplete,
-}: UseBigBrainSwapOptions) {
+}: UseSmartSyncOptions) {
   const hookRef = useRef<HTMLVideoElement>(null);
   const fullRef = useRef<HTMLVideoElement>(null);
-  const [phase, setPhase] = useState<BigBrainPhase>("idle");
+  const [phase, setPhase] = useState<SmartSyncPhase>("idle");
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const swappedRef = useRef(false);
+  const syncActiveRef = useRef(false);
+  const hookRvfcHandle = useRef<number | null>(null);
+  const fullRvfcHandle = useRef<number | null>(null);
+  const hookMediaTimeRef = useRef(0);
+  const fullMediaTimeRef = useRef(0);
   const driftIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null
@@ -80,6 +92,7 @@ export function useBigBrainSwap({
     if (!hook || !full) return;
 
     swappedRef.current = false;
+    syncActiveRef.current = false;
 
     // Set sources — both start at 0:00
     hook.src = hookClipUrl;
@@ -88,7 +101,7 @@ export function useBigBrainSwap({
 
     full.src = fullVideoUrl;
     full.preload = "auto";
-    full.muted = true; // Full video plays muted until swap
+    full.muted = true;
     full.load();
 
     setPhase("loading");
@@ -103,14 +116,23 @@ export function useBigBrainSwap({
     const doSwap = () => {
       if (swappedRef.current) return;
       swappedRef.current = true;
+      syncActiveRef.current = false;
 
-      // Stop drift correction
+      // Stop all sync mechanisms
       if (driftIntervalRef.current) {
         clearInterval(driftIntervalRef.current);
         driftIntervalRef.current = null;
       }
+      if (hookRvfcHandle.current !== null && supportsRVFC(hook)) {
+        hook.cancelVideoFrameCallback(hookRvfcHandle.current);
+        hookRvfcHandle.current = null;
+      }
+      if (fullRvfcHandle.current !== null && supportsRVFC(full)) {
+        full.cancelVideoFrameCallback(fullRvfcHandle.current);
+        fullRvfcHandle.current = null;
+      }
 
-      // Reset playback rate in case drift correction bumped it
+      // Reset playback rate
       full.playbackRate = 1.0;
 
       // Unmute full video, mute + pause hook
@@ -118,24 +140,21 @@ export function useBigBrainSwap({
       hook.muted = true;
       hook.pause();
 
-      // The full video is already playing at the right timestamp
       setPhase("playing_full");
       if (full.duration) {
         setDuration(full.duration);
       }
     };
 
-    // Listen for hook's natural end
     hook.addEventListener("ended", doSwap);
-
-    return () => {
-      hook.removeEventListener("ended", doSwap);
-    };
+    return () => hook.removeEventListener("ended", doSwap);
   }, []);
 
-  // Drift correction: keep full video in sync with hook during parallel playback
+  // Frame-level sync using requestVideoFrameCallback
+  // Falls back to interval-based drift correction for unsupported browsers
   useEffect(() => {
     if (phase !== "playing_hook") {
+      syncActiveRef.current = false;
       if (driftIntervalRef.current) {
         clearInterval(driftIntervalRef.current);
         driftIntervalRef.current = null;
@@ -143,30 +162,98 @@ export function useBigBrainSwap({
       return;
     }
 
-    driftIntervalRef.current = setInterval(() => {
-      const hook = hookRef.current;
-      const full = fullRef.current;
-      if (!hook || !full || hook.paused || full.paused) return;
+    syncActiveRef.current = true;
+    const hook = hookRef.current;
+    const full = fullRef.current;
+    if (!hook || !full) return;
 
-      const drift = hook.currentTime - full.currentTime;
+    if (supportsRVFC(hook) && supportsRVFC(full)) {
+      // --- Frame-accurate sync via requestVideoFrameCallback ---
+      // Track each video's exact media presentation time on every frame.
+      // Compare them and apply micro playbackRate corrections.
 
-      if (drift > 0.3) {
-        // Full video is behind — speed it up slightly to catch up
-        full.playbackRate = 1.05;
-      } else if (drift < -0.3) {
-        // Full video is ahead — slow it down slightly
-        full.playbackRate = 0.95;
-      } else if (full.playbackRate !== 1.0) {
-        // Back in sync — normalize
-        full.playbackRate = 1.0;
-      }
-    }, 500);
+      const correctDrift = () => {
+        if (!syncActiveRef.current) return;
 
-    return () => {
-      if (driftIntervalRef.current) {
-        clearInterval(driftIntervalRef.current);
-      }
-    };
+        const hookTime = hookMediaTimeRef.current;
+        const fullTime = fullMediaTimeRef.current;
+
+        // Only correct once both have reported at least one frame
+        if (hookTime === 0 && fullTime === 0) return;
+
+        const drift = hookTime - fullTime; // positive = full is behind
+
+        if (drift > 0.033) {
+          // Full is >1 frame behind — speed up
+          const rate = drift > 0.15 ? 1.08 : drift > 0.066 ? 1.04 : 1.02;
+          full.playbackRate = rate;
+        } else if (drift < -0.033) {
+          // Full is ahead — slow down
+          const rate = drift < -0.15 ? 0.92 : drift < -0.066 ? 0.96 : 0.98;
+          full.playbackRate = rate;
+        } else if (full.playbackRate !== 1.0) {
+          // Within 1 frame tolerance — normalize
+          full.playbackRate = 1.0;
+        }
+      };
+
+      // Recursive frame callback for hook video
+      const onHookFrame = (_now: number, metadata: VideoFrameCallbackMetadata) => {
+        hookMediaTimeRef.current = metadata.mediaTime;
+        correctDrift();
+        if (syncActiveRef.current) {
+          hookRvfcHandle.current = hook.requestVideoFrameCallback(onHookFrame);
+        }
+      };
+
+      // Recursive frame callback for full video
+      const onFullFrame = (_now: number, metadata: VideoFrameCallbackMetadata) => {
+        fullMediaTimeRef.current = metadata.mediaTime;
+        correctDrift();
+        if (syncActiveRef.current) {
+          fullRvfcHandle.current = full.requestVideoFrameCallback(onFullFrame);
+        }
+      };
+
+      hookRvfcHandle.current = hook.requestVideoFrameCallback(onHookFrame);
+      fullRvfcHandle.current = full.requestVideoFrameCallback(onFullFrame);
+
+      return () => {
+        syncActiveRef.current = false;
+        if (hookRvfcHandle.current !== null) {
+          hook.cancelVideoFrameCallback(hookRvfcHandle.current);
+          hookRvfcHandle.current = null;
+        }
+        if (fullRvfcHandle.current !== null) {
+          full.cancelVideoFrameCallback(fullRvfcHandle.current);
+          fullRvfcHandle.current = null;
+        }
+      };
+    } else {
+      // --- Fallback: interval-based drift correction ---
+      driftIntervalRef.current = setInterval(() => {
+        if (!syncActiveRef.current) return;
+        if (hook.paused || full.paused) return;
+
+        const drift = hook.currentTime - full.currentTime;
+
+        if (drift > 0.3) {
+          full.playbackRate = 1.05;
+        } else if (drift < -0.3) {
+          full.playbackRate = 0.95;
+        } else if (full.playbackRate !== 1.0) {
+          full.playbackRate = 1.0;
+        }
+      }, 500);
+
+      return () => {
+        syncActiveRef.current = false;
+        if (driftIntervalRef.current) {
+          clearInterval(driftIntervalRef.current);
+          driftIntervalRef.current = null;
+        }
+      };
+    }
   }, [phase]);
 
   // Track current time and progress milestones
@@ -224,6 +311,8 @@ export function useBigBrainSwap({
     if (phase === "idle" || phase === "loading") {
       // First click: start BOTH videos simultaneously
       swappedRef.current = false;
+      hookMediaTimeRef.current = 0;
+      fullMediaTimeRef.current = 0;
 
       // Full video plays muted underneath from 0:00
       full.muted = true;
@@ -242,16 +331,12 @@ export function useBigBrainSwap({
           onPlay?.();
         })
         .catch(() => {
-          // Autoplay may be blocked — try just the hook
           hook
             .play()
             .then(() => {
               setPhase("playing_hook");
               onPlay?.();
-              // Try full video again after user gesture
-              full.play().catch(() => {
-                // Will retry on swap
-              });
+              full.play().catch(() => {});
             })
             .catch(() => {
               setPhase("idle");
@@ -274,7 +359,6 @@ export function useBigBrainSwap({
     }
 
     if (phase === "paused") {
-      // Resume whichever was active
       if (swappedRef.current) {
         full.play().then(() => setPhase("playing_full"));
       } else {
@@ -286,8 +370,9 @@ export function useBigBrainSwap({
     }
 
     if (phase === "ended") {
-      // Restart from beginning
       swappedRef.current = false;
+      hookMediaTimeRef.current = 0;
+      fullMediaTimeRef.current = 0;
       hook.currentTime = 0;
       full.currentTime = 0;
       full.muted = true;
@@ -308,7 +393,6 @@ export function useBigBrainSwap({
     duration,
     togglePlay,
     isPlaying: phase === "playing_hook" || phase === "playing_full",
-    // Z-index based: hook is on top during hook phase, full on top after swap
     hookOnTop: phase !== "playing_full" && phase !== "ended",
   };
 }

@@ -17,7 +17,7 @@
 "use client";
 
 import { useState } from "react";
-import { useBigBrainSwap } from "./useBigBrainSwap";
+import { useSmartSync } from "./useSmartSync";
 
 interface SmartSyncPlayerProps {
   hookClipUrl: string;
@@ -39,7 +39,7 @@ export function SmartSyncPlayer({
   const [hasInteracted, setHasInteracted] = useState(false);
 
   const { hookRef, fullRef, phase, togglePlay, hookOnTop } =
-    useBigBrainSwap({
+    useSmartSync({
       hookClipUrl,
       fullVideoUrl,
       hookEndTimeMs,
