@@ -11,7 +11,7 @@ WORKDIR /app
 # Remove dotenv after install — v17 auto-patches process.env on load,
 # which shadows Railway-injected env vars. Worker doesn't need it.
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm install tsx && npm uninstall dotenv
+RUN npm ci --omit=dev && npm install tsx && rm -rf node_modules/dotenv
 
 # Copy source code
 COPY src/ ./src/
