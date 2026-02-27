@@ -219,6 +219,15 @@ async function remuxWithFaststart(
   ]);
 }
 
+// Write progress to the processing_jobs table so the dashboard can show percentages
+async function updateJobProgress(targetId: string, jobType: string, progress: number) {
+  await supabase
+    .from("processing_jobs")
+    .update({ progress })
+    .eq("target_id", targetId)
+    .eq("job_type", jobType);
+}
+
 // ──────────────────────────────────────────
 // NORMALIZE WORKER
 // ──────────────────────────────────────────
@@ -239,12 +248,14 @@ async function processNormalize(job: Job<NormalizeJobData>) {
       .eq("job_type", "normalize");
 
     await job.updateProgress(10);
+    await updateJobProgress(segmentId, "normalize", 10);
 
     // Download original
     const inputPath = join(workDir, "input.mp4");
     log("info", "normalize", job.id, `Downloading ${originalStorageKey}`);
     await downloadFromR2(originalStorageKey, inputPath);
     await job.updateProgress(20);
+    await updateJobProgress(segmentId, "normalize", 20);
 
     // Probe metadata
     log("info", "normalize", job.id, `Probing segment ${segmentId}`);
@@ -263,6 +274,7 @@ async function processNormalize(job: Job<NormalizeJobData>) {
       .eq("id", segmentId);
 
     await job.updateProgress(30);
+    await updateJobProgress(segmentId, "normalize", 30);
 
     // Get project specs
     const { data: rawProject } = await supabase
@@ -302,6 +314,7 @@ async function processNormalize(job: Job<NormalizeJobData>) {
       await remuxWithFaststart(inputPath, outputPath);
     }
     await job.updateProgress(70);
+    await updateJobProgress(segmentId, "normalize", 70);
 
     // Probe normalized output
     const normalizedMeta = await probeVideo(outputPath);
@@ -311,6 +324,7 @@ async function processNormalize(job: Job<NormalizeJobData>) {
     log("info", "normalize", job.id, `Uploading normalized to ${storageKey}`);
     const sizeBytes = await uploadToR2(outputPath, storageKey);
     await job.updateProgress(90);
+    await updateJobProgress(segmentId, "normalize", 90);
 
     // Update segment record
     await supabase
@@ -491,6 +505,7 @@ async function processRender(job: Job<RenderJobData>) {
       .eq("job_type", "render");
 
     await job.updateProgress(10);
+    await updateJobProgress(variantId, "render", 10);
 
     // Download all three normalized segments
     const hookPath = join(workDir, "hook.mp4");
@@ -504,12 +519,14 @@ async function processRender(job: Job<RenderJobData>) {
       downloadFromR2(ctaNormalizedKey, ctaPath),
     ]);
     await job.updateProgress(30);
+    await updateJobProgress(variantId, "render", 30);
 
     // Stitch segments
     const variantPath = join(workDir, "variant.mp4");
     log("info", "render", job.id, `Stitching variant ${variantId}`);
     await stitchSegments([hookPath, bodyPath, ctaPath], variantPath, workDir);
     await job.updateProgress(50);
+    await updateJobProgress(variantId, "render", 50);
 
     // Extract hook clip + poster frame
     const hookClipPath = join(workDir, "hook-clip.mp4");
@@ -519,6 +536,7 @@ async function processRender(job: Job<RenderJobData>) {
     log("info", "render", job.id, `Extracting poster frame for variant ${variantId}`);
     await extractPosterFrame(variantPath, posterPath);
     await job.updateProgress(60);
+    await updateJobProgress(variantId, "render", 60);
 
     // Probe the rendered variant
     const variantMeta = await probeVideo(variantPath);
@@ -529,18 +547,21 @@ async function processRender(job: Job<RenderJobData>) {
     log("info", "render", job.id, `Uploading variant video to ${videoKey}`);
     const videoSize = await uploadToR2(variantPath, videoKey);
     await job.updateProgress(75);
+    await updateJobProgress(variantId, "render", 75);
 
     // Upload hook clip
     const hookClipKey = variantHookClipKey(projectId, variantId);
     log("info", "render", job.id, `Uploading hook clip to ${hookClipKey}`);
     const hookClipSize = await uploadToR2(hookClipPath, hookClipKey);
     await job.updateProgress(85);
+    await updateJobProgress(variantId, "render", 85);
 
     // Upload poster frame
     const posterKey = variantPosterKey(projectId, variantId);
     log("info", "render", job.id, `Uploading poster to ${posterKey}`);
     await uploadToR2(posterPath, posterKey, "image/jpeg");
     await job.updateProgress(90);
+    await updateJobProgress(variantId, "render", 90);
 
     // Update variant record
     await supabase

@@ -99,6 +99,12 @@ export function usePlayerSwap({
     full.preload = "auto";
     full.load();
 
+    // Pre-seek the full video to the swap point so the browser buffers
+    // around that timestamp during hook playback (instead of buffering from 0:00)
+    if (hookEndTimeMs > 0) {
+      full.currentTime = hookEndTimeMs / 1000;
+    }
+
     // Monitor full video buffering
     const checkBuffer = () => {
       if (full.readyState >= 3) {
@@ -144,14 +150,11 @@ export function usePlayerSwap({
     const handleHookEnded = async () => {
       setPhase("swapping");
 
-      // Seek full video to where hook ends
       const seekTime = hookEndTimeMs / 1000;
-      full.currentTime = seekTime;
 
       const doSwap = async () => {
         try {
           await full.play();
-          // Use requestAnimationFrame to ensure the frame is rendered before swapping
           requestAnimationFrame(() => {
             setPhase("playing_full");
             if (full.duration) {
@@ -163,12 +166,19 @@ export function usePlayerSwap({
         }
       };
 
-      if (full.readyState >= 3) {
-        // Full video ready — swap immediately
+      // If pre-seek landed correctly and video is buffered, swap immediately
+      if (Math.abs(full.currentTime - seekTime) < 0.1 && full.readyState >= 3) {
         await doSwap();
       } else {
-        // Wait for full video to be ready
-        full.addEventListener("canplay", doSwap, { once: true });
+        // Seek to swap point and wait for browser to confirm data is available
+        full.currentTime = seekTime;
+        full.addEventListener("seeked", () => {
+          if (full.readyState >= 3) {
+            doSwap();
+          } else {
+            full.addEventListener("canplay", () => doSwap(), { once: true });
+          }
+        }, { once: true });
       }
     };
 

@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Progress } from "@/components/ui/progress";
-import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -14,10 +13,38 @@ import type { Database } from "@/lib/supabase/types";
 
 type Segment = Database["public"]["Tables"]["segments"]["Row"];
 type Variant = Database["public"]["Tables"]["variants"]["Row"];
+type ProcessingJob = Database["public"]["Tables"]["processing_jobs"]["Row"];
 
 interface ProcessingProgressProps {
   projectId: string;
   onComplete?: () => void;
+}
+
+function Spinner({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      className={`animate-spin ${className}`}
+      width="14"
+      height="14"
+      viewBox="0 0 14 14"
+      fill="none"
+    >
+      <circle
+        cx="7"
+        cy="7"
+        r="5.5"
+        stroke="currentColor"
+        strokeOpacity="0.2"
+        strokeWidth="2"
+      />
+      <path
+        d="M12.5 7a5.5 5.5 0 00-5.5-5.5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
 }
 
 export function ProcessingProgress({
@@ -26,13 +53,14 @@ export function ProcessingProgress({
 }: ProcessingProgressProps) {
   const [segments, setSegments] = useState<Segment[]>([]);
   const [variants, setVariants] = useState<Variant[]>([]);
+  const [jobs, setJobs] = useState<ProcessingJob[]>([]);
   const [phase, setPhase] = useState<"normalizing" | "rendering" | "complete">(
     "normalizing"
   );
   const supabase = useMemo(() => createClient(), []);
 
   const fetchData = useCallback(async () => {
-    const [segRes, varRes] = await Promise.all([
+    const [segRes, varRes, jobRes] = await Promise.all([
       supabase
         .from("segments")
         .select("*")
@@ -44,15 +72,20 @@ export function ProcessingProgress({
         .select("*")
         .eq("project_id", projectId)
         .order("variant_code"),
+      supabase
+        .from("processing_jobs")
+        .select("*")
+        .eq("project_id", projectId),
     ]);
     if (segRes.data) setSegments(segRes.data as Segment[]);
     if (varRes.data) setVariants(varRes.data as Variant[]);
+    if (jobRes.data) setJobs(jobRes.data as ProcessingJob[]);
   }, [projectId, supabase]);
 
   // Initial load + polling fallback
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 3000);
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, [fetchData]);
 
@@ -99,6 +132,26 @@ export function ProcessingProgress({
       .on(
         "postgres_changes",
         {
+          event: "*",
+          schema: "public",
+          table: "processing_jobs",
+          filter: `project_id=eq.${projectId}`,
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT") {
+            setJobs((prev) => [...prev, payload.new as ProcessingJob]);
+          } else if (payload.eventType === "UPDATE") {
+            setJobs((prev) =>
+              prev.map((j) =>
+                j.id === payload.new.id ? { ...j, ...payload.new } : j
+              )
+            );
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
           event: "UPDATE",
           schema: "public",
           table: "projects",
@@ -117,20 +170,54 @@ export function ProcessingProgress({
     };
   }, [projectId, supabase, onComplete]);
 
+  // Build a lookup: target_id → processing job
+  const jobMap = useMemo(() => {
+    const map = new Map<string, ProcessingJob>();
+    for (const j of jobs) {
+      map.set(j.target_id, j);
+    }
+    return map;
+  }, [jobs]);
+
   // Compute phase and progress
   const normalizedCount = segments.filter(
     (s) => s.status === "normalized"
   ).length;
   const failedSegments = segments.filter((s) => s.status === "failed");
   const totalSegments = segments.length;
-  const normalizeProgress =
-    totalSegments > 0 ? (normalizedCount / totalSegments) * 100 : 0;
+
+  // Per-segment weighted progress for smoother overall bar
+  const normalizeProgress = useMemo(() => {
+    if (totalSegments === 0) return 0;
+    let total = 0;
+    for (const seg of segments) {
+      if (seg.status === "normalized") {
+        total += 100;
+      } else if (seg.status === "normalizing") {
+        const job = jobMap.get(seg.id);
+        total += job?.progress ?? 0;
+      }
+    }
+    return total / totalSegments;
+  }, [segments, totalSegments, jobMap]);
 
   const renderedCount = variants.filter((v) => v.status === "rendered").length;
   const failedVariants = variants.filter((v) => v.status === "failed");
   const totalVariants = variants.length;
-  const renderProgress =
-    totalVariants > 0 ? (renderedCount / totalVariants) * 100 : 0;
+
+  const renderProgress = useMemo(() => {
+    if (totalVariants === 0) return 0;
+    let total = 0;
+    for (const v of variants) {
+      if (v.status === "rendered") {
+        total += 100;
+      } else if (v.status === "rendering") {
+        const job = jobMap.get(v.id);
+        total += job?.progress ?? 0;
+      }
+    }
+    return total / totalVariants;
+  }, [variants, totalVariants, jobMap]);
 
   // Determine current phase
   useEffect(() => {
@@ -152,33 +239,19 @@ export function ProcessingProgress({
         ? 50 + renderProgress * 0.5
         : normalizeProgress * 0.5;
 
-  const statusBadge = (
-    status: string,
-  ) => {
-    const colors: Record<string, string> = {
-      uploaded: "bg-zinc-700 text-zinc-400",
-      normalizing: "bg-blue-500/20 text-blue-400",
-      normalized: "bg-green-500/20 text-green-400",
-      pending: "bg-zinc-700 text-zinc-400",
-      rendering: "bg-yellow-500/20 text-yellow-400",
-      rendered: "bg-green-500/20 text-green-400",
-      failed: "bg-red-500/20 text-red-400",
-    };
-    return (
-      <Badge variant="secondary" className={colors[status] || ""}>
-        {status}
-      </Badge>
-    );
-  };
+  const isActive = phase !== "complete";
 
   return (
     <div className="space-y-4">
       {/* Overall progress */}
-      <Card className="border-zinc-800 bg-zinc-900">
+      <Card className="border-border bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center justify-between text-base text-white">
-            <span>Processing Pipeline</span>
-            <span className="text-sm font-normal text-zinc-400">
+          <CardTitle className="flex items-center justify-between text-base text-foreground">
+            <span className="flex items-center gap-2">
+              {isActive && <Spinner className="text-primary" />}
+              Processing Pipeline
+            </span>
+            <span className="text-sm font-normal text-muted-foreground tabular-nums">
               {Math.round(overallProgress)}%
             </span>
           </CardTitle>
@@ -186,38 +259,39 @@ export function ProcessingProgress({
         <CardContent className="space-y-3">
           <Progress
             value={overallProgress}
-            className="h-3 bg-zinc-800"
+            className="h-3 bg-muted"
+            animated={isActive}
             indicatorClassName={
               phase === "complete"
-                ? "bg-green-500"
+                ? "bg-emerald-500"
                 : phase === "rendering"
-                  ? "bg-yellow-500"
+                  ? "bg-amber-500"
                   : "bg-blue-500"
             }
           />
-          <div className="flex justify-between text-xs text-zinc-500">
+          <div className="flex justify-between text-xs text-muted-foreground">
             <span
               className={
                 phase === "normalizing"
                   ? "text-blue-400 font-medium"
-                  : "text-green-400"
+                  : "text-emerald-400"
               }
             >
-              1. Normalize segments
+              1. Normalize
             </span>
             <span
               className={
                 phase === "rendering"
-                  ? "text-yellow-400 font-medium"
+                  ? "text-amber-400 font-medium"
                   : phase === "complete"
-                    ? "text-green-400"
+                    ? "text-emerald-400"
                     : ""
               }
             >
-              2. Render variants
+              2. Render
             </span>
             <span
-              className={phase === "complete" ? "text-green-400 font-medium" : ""}
+              className={phase === "complete" ? "text-emerald-400 font-medium" : ""}
             >
               3. Ready
             </span>
@@ -226,9 +300,9 @@ export function ProcessingProgress({
       </Card>
 
       {/* Normalization progress */}
-      <Card className="border-zinc-800 bg-zinc-900">
+      <Card className="border-border bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center justify-between text-sm text-white">
+          <CardTitle className="flex items-center justify-between text-sm text-foreground">
             <span className="flex items-center gap-2">
               {phase === "normalizing" && (
                 <span className="relative flex h-2 w-2">
@@ -238,7 +312,7 @@ export function ProcessingProgress({
               )}
               Normalizing Segments
             </span>
-            <span className="font-normal text-zinc-400">
+            <span className="font-normal text-muted-foreground tabular-nums">
               {normalizedCount}/{totalSegments}
             </span>
           </CardTitle>
@@ -246,34 +320,70 @@ export function ProcessingProgress({
         <CardContent className="space-y-2">
           <Progress
             value={normalizeProgress}
-            className="h-2 bg-zinc-800"
+            className="h-2 bg-muted"
+            animated={phase === "normalizing"}
             indicatorClassName="bg-blue-500"
           />
           <div className="space-y-1.5">
-            {segments.map((seg) => (
-              <div
-                key={seg.id}
-                className="flex items-center justify-between rounded-md border border-zinc-800 px-3 py-1.5"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium uppercase text-zinc-500">
-                    {seg.type}
-                  </span>
-                  <span className="text-sm text-zinc-300">{seg.label}</span>
+            {segments.map((seg) => {
+              const job = jobMap.get(seg.id);
+              const isProcessing = seg.status === "normalizing";
+              const isDone = seg.status === "normalized";
+              const isFailed = seg.status === "failed";
+
+              return (
+                <div
+                  key={seg.id}
+                  className="flex items-center justify-between rounded-lg border border-border px-3 py-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium uppercase text-muted-foreground">
+                      {seg.type}
+                    </span>
+                    <span className="text-sm text-foreground/80">{seg.label}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isProcessing && (
+                      <>
+                        <div className="w-16 overflow-hidden">
+                          <Progress
+                            value={job?.progress ?? 0}
+                            className="h-1.5 bg-muted"
+                            animated
+                            indicatorClassName="bg-blue-500"
+                          />
+                        </div>
+                        <span className="flex items-center gap-1.5 text-xs font-medium text-blue-400 tabular-nums">
+                          <Spinner className="text-blue-400" />
+                          {job?.progress ?? 0}%
+                        </span>
+                      </>
+                    )}
+                    {isDone && (
+                      <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-400">
+                        <svg className="h-3 w-3" viewBox="0 0 12 12" fill="none">
+                          <path d="M2.5 6l2.5 2.5 4.5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        done
+                      </span>
+                    )}
+                    {isFailed && (
+                      <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-400">
+                        failed
+                      </span>
+                    )}
+                    {!isProcessing && !isDone && !isFailed && (
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                        {seg.status}
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {seg.status === "normalizing" && (
-                    <div className="h-1 w-12 overflow-hidden rounded-full bg-zinc-700">
-                      <div className="h-full w-full animate-pulse rounded-full bg-blue-500" />
-                    </div>
-                  )}
-                  {statusBadge(seg.status)}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           {failedSegments.length > 0 && (
-            <div className="mt-2 rounded-md bg-red-500/10 p-2 text-xs text-red-400">
+            <div className="mt-2 rounded-lg bg-red-500/10 p-2.5 text-xs text-red-400">
               {failedSegments.length} segment(s) failed.{" "}
               {failedSegments[0]?.error_message}
             </div>
@@ -283,19 +393,19 @@ export function ProcessingProgress({
 
       {/* Render progress */}
       {(phase === "rendering" || phase === "complete" || variants.length > 0) && (
-        <Card className="border-zinc-800 bg-zinc-900">
+        <Card className="border-border bg-card">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center justify-between text-sm text-white">
+            <CardTitle className="flex items-center justify-between text-sm text-foreground">
               <span className="flex items-center gap-2">
                 {phase === "rendering" && (
                   <span className="relative flex h-2 w-2">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-yellow-400 opacity-75" />
-                    <span className="relative inline-flex h-2 w-2 rounded-full bg-yellow-500" />
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
                   </span>
                 )}
                 Rendering Variants
               </span>
-              <span className="font-normal text-zinc-400">
+              <span className="font-normal text-muted-foreground tabular-nums">
                 {renderedCount}/{totalVariants}
               </span>
             </CardTitle>
@@ -303,31 +413,67 @@ export function ProcessingProgress({
           <CardContent className="space-y-2">
             <Progress
               value={renderProgress}
-              className="h-2 bg-zinc-800"
-              indicatorClassName="bg-yellow-500"
+              className="h-2 bg-muted"
+              animated={phase === "rendering"}
+              indicatorClassName="bg-amber-500"
             />
             <div className="grid gap-1.5 sm:grid-cols-2">
-              {variants.map((v) => (
-                <div
-                  key={v.id}
-                  className="flex items-center justify-between rounded-md border border-zinc-800 px-3 py-1.5"
-                >
-                  <span className="font-mono text-sm text-zinc-300">
-                    {v.variant_code}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    {v.status === "rendering" && (
-                      <div className="h-1 w-12 overflow-hidden rounded-full bg-zinc-700">
-                        <div className="h-full w-full animate-pulse rounded-full bg-yellow-500" />
-                      </div>
-                    )}
-                    {statusBadge(v.status)}
+              {variants.map((v) => {
+                const job = jobMap.get(v.id);
+                const isProcessing = v.status === "rendering";
+                const isDone = v.status === "rendered";
+                const isFailed = v.status === "failed";
+
+                return (
+                  <div
+                    key={v.id}
+                    className="flex items-center justify-between rounded-lg border border-border px-3 py-2"
+                  >
+                    <span className="font-mono text-sm text-foreground/80">
+                      {v.variant_code}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {isProcessing && (
+                        <>
+                          <div className="w-12 overflow-hidden">
+                            <Progress
+                              value={job?.progress ?? 0}
+                              className="h-1.5 bg-muted"
+                              animated
+                              indicatorClassName="bg-amber-500"
+                            />
+                          </div>
+                          <span className="flex items-center gap-1.5 text-xs font-medium text-amber-400 tabular-nums">
+                            <Spinner className="text-amber-400" />
+                            {job?.progress ?? 0}%
+                          </span>
+                        </>
+                      )}
+                      {isDone && (
+                        <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-400">
+                          <svg className="h-3 w-3" viewBox="0 0 12 12" fill="none">
+                            <path d="M2.5 6l2.5 2.5 4.5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                          done
+                        </span>
+                      )}
+                      {isFailed && (
+                        <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-400">
+                          failed
+                        </span>
+                      )}
+                      {!isProcessing && !isDone && !isFailed && (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                          {v.status}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             {failedVariants.length > 0 && (
-              <div className="mt-2 rounded-md bg-red-500/10 p-2 text-xs text-red-400">
+              <div className="mt-2 rounded-lg bg-red-500/10 p-2.5 text-xs text-red-400">
                 {failedVariants.length} variant(s) failed.{" "}
                 {failedVariants[0]?.error_message}
               </div>
@@ -338,8 +484,8 @@ export function ProcessingProgress({
 
       {/* Completion */}
       {phase === "complete" && (
-        <div className="rounded-lg border border-green-500/30 bg-green-500/10 p-4 text-center">
-          <p className="text-sm font-medium text-green-400">
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 text-center">
+          <p className="text-sm font-medium text-emerald-400">
             All {totalVariants} variants rendered successfully!
           </p>
         </div>
