@@ -24,12 +24,6 @@
  *                                                   paused
  *   Any state → error (on network/decode failure)
  *
- * WHY A STATE MACHINE:
- *   Video playback involves many async events (canplay, ended, seeked, etc.)
- *   and race conditions (what if the hook ends before the full video buffers?).
- *   A state machine makes the transitions explicit and debuggable. Each state
- *   has clear entry/exit conditions, preventing impossible states.
- *
  * ARCHITECTURE:
  *   - Used by: EmbedPlayer.tsx component
  *   - Returns: refs for both video elements, current phase, and control functions
@@ -73,9 +67,10 @@ export function usePlayerSwap({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [fullVideoReady, setFullVideoReady] = useState(false);
+  const fullSeekedRef = useRef(false);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Active player is whichever is currently visible (memoized to prevent unnecessary re-renders)
+  // Active player is whichever is currently visible
   const activeRef = useMemo(
     () => (phase === "playing_full" || phase === "ended" ? fullRef : hookRef),
     [phase]
@@ -89,6 +84,7 @@ export function usePlayerSwap({
     const full = fullRef.current;
     if (!hook || !full) return;
 
+    fullSeekedRef.current = false;
     setPhase("loading_hook");
 
     // Set sources
@@ -99,16 +95,17 @@ export function usePlayerSwap({
     full.preload = "auto";
     full.load();
 
-    // Pre-seek the full video to the swap point so the browser buffers
-    // around that timestamp during hook playback (instead of buffering from 0:00)
-    if (hookEndTimeMs > 0) {
-      full.currentTime = hookEndTimeMs / 1000;
-    }
+    // Pre-seek AFTER metadata loads — seeking before metadata is silently ignored
+    const handleMetadata = () => {
+      if (hookEndTimeMs > 0) {
+        full.currentTime = hookEndTimeMs / 1000;
+      }
+    };
+    full.addEventListener("loadedmetadata", handleMetadata, { once: true });
 
-    // Monitor full video buffering
+    // Monitor full video buffering around the swap point
     const checkBuffer = () => {
       if (full.readyState >= 3) {
-        // HAVE_FUTURE_DATA or better
         setFullVideoReady(true);
       }
     };
@@ -118,10 +115,11 @@ export function usePlayerSwap({
     full.addEventListener("progress", checkBuffer);
 
     return () => {
+      full.removeEventListener("loadedmetadata", handleMetadata);
       full.removeEventListener("canplaythrough", handleCanPlayThrough);
       full.removeEventListener("progress", checkBuffer);
     };
-  }, [hookClipUrl, fullVideoUrl]);
+  }, [hookClipUrl, fullVideoUrl, hookEndTimeMs]);
 
   // Hook can play → start playing
   useEffect(() => {
@@ -147,38 +145,63 @@ export function usePlayerSwap({
     const full = fullRef.current;
     if (!hook || !full) return;
 
-    const handleHookEnded = async () => {
+    const handleHookEnded = () => {
       setPhase("swapping");
 
       const seekTime = hookEndTimeMs / 1000;
+      let swapped = false;
 
-      const doSwap = async () => {
-        try {
-          await full.play();
-          requestAnimationFrame(() => {
-            setPhase("playing_full");
-            if (full.duration) {
-              setDuration(full.duration);
-            }
+      const doSwap = () => {
+        // Guard against double-firing (both seeked and canplay may fire)
+        if (swapped) return;
+        swapped = true;
+
+        full.play()
+          .then(() => {
+            requestAnimationFrame(() => {
+              setPhase("playing_full");
+              if (full.duration) {
+                setDuration(full.duration);
+              }
+            });
+          })
+          .catch(() => {
+            setPhase("error");
           });
-        } catch {
-          setPhase("error");
-        }
       };
 
-      // If pre-seek landed correctly and video is buffered, swap immediately
-      if (Math.abs(full.currentTime - seekTime) < 0.1 && full.readyState >= 3) {
-        await doSwap();
+      // Check if full video is already at the right position and ready
+      const isAtPosition = Math.abs(full.currentTime - seekTime) < 0.5;
+      const isReady = full.readyState >= 3;
+
+      if (isAtPosition && isReady) {
+        // Best case: pre-seek worked, data is buffered — swap immediately
+        doSwap();
       } else {
-        // Seek to swap point and wait for browser to confirm data is available
-        full.currentTime = seekTime;
-        full.addEventListener("seeked", () => {
+        // Attach listeners BEFORE seeking to avoid race conditions
+        const onReady = () => {
           if (full.readyState >= 3) {
             doSwap();
-          } else {
-            full.addEventListener("canplay", () => doSwap(), { once: true });
           }
-        }, { once: true });
+        };
+
+        full.addEventListener("seeked", onReady, { once: true });
+        full.addEventListener("canplay", onReady, { once: true });
+
+        // Seek to swap point (listeners will catch when ready)
+        if (!isAtPosition) {
+          full.currentTime = seekTime;
+        }
+
+        // Safety timeout: if neither event fires within 3s, force the swap
+        // (better to have a slight stutter than a frozen player)
+        setTimeout(() => {
+          if (!swapped) {
+            full.removeEventListener("seeked", onReady);
+            full.removeEventListener("canplay", onReady);
+            doSwap();
+          }
+        }, 3000);
       }
     };
 
