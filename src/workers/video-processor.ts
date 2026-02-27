@@ -51,8 +51,10 @@
  *     → embed player can now serve variants
  */
 
+// Load .env.local for local dev; on Railway, env vars are injected directly
 import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
+dotenv.config();
 import { Worker, Job } from "bullmq";
 import { createClient } from "@supabase/supabase-js";
 import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
@@ -87,6 +89,9 @@ const r2 = new S3Client({
     accessKeyId: process.env.R2_ACCESS_KEY_ID!,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
   },
+  forcePathStyle: true,
+  requestChecksumCalculation: "WHEN_REQUIRED",
+  responseChecksumValidation: "WHEN_REQUIRED",
 });
 
 const BUCKET = process.env.R2_BUCKET_NAME!;
