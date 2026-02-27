@@ -53,10 +53,14 @@
  *     → embed player can now serve variants
  */
 
-// Load .env.local for local dev; on Railway, env vars are injected directly
-import dotenv from "dotenv";
-dotenv.config({ path: ".env.local" });
-dotenv.config();
+// Load .env files only in local dev. In production (Railway), env vars are
+// injected directly and dotenv v17's process.env proxy can shadow them.
+if (!process.env.REDIS_URL) {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const dotenv = require("dotenv");
+  dotenv.config({ path: ".env.local" });
+  dotenv.config();
+}
 import { Worker, Job } from "bullmq";
 import { createClient } from "@supabase/supabase-js";
 import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
