@@ -154,7 +154,7 @@ export function ProcessingProgress({
 
   const statusBadge = (
     status: string,
-    type: "segment" | "variant"
+    _type: "segment" | "variant"
   ) => {
     const colors: Record<string, string> = {
       uploaded: "bg-zinc-700 text-zinc-400",
