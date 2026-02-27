@@ -26,6 +26,8 @@
  *   - /projects/[id]/upload, /preview, /embed
  */
 
+export const dynamic = "force-dynamic";
+
 import { Sidebar } from "@/components/layout/Sidebar";
 
 export default function DashboardLayout({

@@ -6,6 +6,8 @@
  *   Clean, focused auth experience with subtle branding.
  */
 
+export const dynamic = "force-dynamic";
+
 export default function AuthLayout({
   children,
 }: {
