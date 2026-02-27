@@ -38,7 +38,7 @@ export function SmartSyncPlayer({
 }: SmartSyncPlayerProps) {
   const [hasInteracted, setHasInteracted] = useState(false);
 
-  const { hookRef, fullRef, phase, togglePlay, hookOnTop } =
+  const { hookRef, fullRef, phase, togglePlay } =
     useSmartSync({
       hookClipUrl,
       fullVideoUrl,
@@ -77,7 +77,7 @@ export function SmartSyncPlayer({
       }}
       onClick={handleClick}
     >
-      {/* Full variant video — plays underneath during hook, on top after swap */}
+      {/* Full variant video — z-index managed by useSmartSync via DOM */}
       <video
         ref={fullRef}
         playsInline
@@ -88,11 +88,10 @@ export function SmartSyncPlayer({
           width: "100%",
           height: "100%",
           objectFit: "contain",
-          zIndex: hookOnTop ? 1 : 3,
         }}
       />
 
-      {/* Hook clip player — sits on top during hook phase */}
+      {/* Hook clip player — z-index managed by useSmartSync via DOM */}
       <video
         ref={hookRef}
         playsInline
@@ -103,7 +102,6 @@ export function SmartSyncPlayer({
           width: "100%",
           height: "100%",
           objectFit: "contain",
-          zIndex: hookOnTop ? 2 : 0,
         }}
       />
 

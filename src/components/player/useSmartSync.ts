@@ -94,6 +94,10 @@ export function useSmartSync({
     swappedRef.current = false;
     syncActiveRef.current = false;
 
+    // Set initial z-index via DOM (hook on top, full underneath)
+    hook.style.zIndex = "2";
+    full.style.zIndex = "1";
+
     // Set sources — both start at 0:00
     hook.src = hookClipUrl;
     hook.preload = "auto";
@@ -135,11 +139,17 @@ export function useSmartSync({
       // Reset playback rate
       full.playbackRate = 1.0;
 
-      // Unmute full video, mute + pause hook
+      // === CRITICAL: All swap mutations must be synchronous ===
+      // Direct DOM manipulation ensures visual + audio swap happen
+      // in the SAME JS execution frame, before the browser paints.
+      // React state updates are async and would cause a 1-frame gap.
+      full.style.zIndex = "3";
+      hook.style.zIndex = "0";
       full.muted = false;
       hook.muted = true;
       hook.pause();
 
+      // React state update for UI consistency (NOT for the swap itself)
       setPhase("playing_full");
       if (full.duration) {
         setDuration(full.duration);
@@ -398,6 +408,9 @@ export function useSmartSync({
       full.currentTime = 0;
       full.muted = true;
       hook.muted = false;
+      // Reset z-index via DOM for replay
+      hook.style.zIndex = "2";
+      full.style.zIndex = "1";
 
       hook.play();
       full.play();
@@ -414,6 +427,5 @@ export function useSmartSync({
     duration,
     togglePlay,
     isPlaying: phase === "playing_hook" || phase === "playing_full",
-    hookOnTop: phase !== "playing_full" && phase !== "ended",
   };
 }
