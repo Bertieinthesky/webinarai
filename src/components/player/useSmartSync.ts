@@ -187,36 +187,31 @@ export function useSmartSync({
       // Reset playback rate
       full.playbackRate = 1.0;
 
-      // Force-sync: snap full video to hook's exact position.
-      // Drift correction keeps them close (~33ms), but any remaining
-      // gap causes the "rewind glitch" — viewer sees a moment they
-      // already watched. This seek is masked by the 80ms crossfade.
-      if (Math.abs(hook.currentTime - full.currentTime) > 0.016) {
-        full.currentTime = hook.currentTime;
-      }
+      // === TRUE CROSSFADE SWAP ===
+      // The hook (z-index 2) sits on top of the full video (z-index 1).
+      // Instead of flipping z-index (which instantly reveals any drift),
+      // fade OUT the hook over 200ms. The full video shows through as
+      // the hook becomes transparent. Since both play the same content,
+      // even 50-100ms of drift is invisible — the frames blend together.
+      //
+      // DO NOT seek full.currentTime here — seeking to a non-keyframe
+      // causes the browser to show the nearest prior keyframe first,
+      // which is the "rewind" artifact viewers see.
 
-      // === CRITICAL: All swap mutations must be synchronous ===
-      // Direct DOM manipulation ensures visual + audio swap happen
-      // in the SAME JS execution frame, before the browser paints.
-
-      // Micro-crossfade: briefly show both at full opacity with the full
-      // video on top. The 80ms transition masks any sub-frame visual
-      // difference between the two encodings.
-      full.style.transition = "opacity 0.08s";
-      hook.style.transition = "opacity 0.08s";
-      full.style.zIndex = "3";
-      full.style.opacity = "1";
-      hook.style.zIndex = "0";
-
-      // Audio swap
+      // Audio swap — immediate (audio drift <100ms is imperceptible)
       full.muted = false;
       hook.muted = true;
 
-      // Fade out hook after crossfade completes
+      // Fade out the hook — full video shows through underneath
+      hook.style.transition = "opacity 0.2s ease-out";
+      hook.style.opacity = "0";
+
+      // After crossfade completes, clean up the hook
       setTimeout(() => {
-        hook.style.opacity = "0";
         hook.pause();
-      }, 80);
+        full.style.zIndex = "3";
+        hook.style.zIndex = "0";
+      }, 220);
 
       // React state update for UI consistency (NOT for the swap itself)
       setPhase("playing_full");
