@@ -27,7 +27,7 @@ interface SplitProgressProps {
 
 export function SplitProgress({ splitId, onComplete, onError }: SplitProgressProps) {
   const [clips, setClips] = useState<Clip[]>([]);
-  const [splitStatus, setSplitStatus] = useState("splitting");
+  const [, setSplitStatus] = useState("splitting");
 
   const poll = useCallback(async () => {
     try {

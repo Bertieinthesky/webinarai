@@ -57,12 +57,6 @@ const statusConfig: Record<
   },
 };
 
-const variantStatusConfig: Record<string, { bg: string; text: string }> = {
-  rendered: { bg: "bg-emerald-500/10", text: "text-emerald-400" },
-  rendering: { bg: "bg-amber-500/10", text: "text-amber-400" },
-  failed: { bg: "bg-red-500/10", text: "text-red-400" },
-  pending: { bg: "bg-zinc-500/10", text: "text-zinc-500" },
-};
 
 function StatusBadge({ status }: { status: string }) {
   const config = statusConfig[status] || statusConfig.draft;
