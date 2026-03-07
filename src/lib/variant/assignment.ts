@@ -43,6 +43,25 @@ export function assignVariant(
 }
 
 /**
+ * assignVariantWeighted — Weight-aware variant assignment
+ *
+ * Filters out disabled variants (weight === 0), then uses deterministic
+ * hashing among the remaining active variants. Returns null if all
+ * variants are disabled.
+ */
+export function assignVariantWeighted(
+  viewerId: string,
+  projectId: string,
+  variants: { id: string; weight: number }[]
+): string | null {
+  const active = variants.filter((v) => v.weight > 0);
+  if (active.length === 0) return null;
+
+  const index = assignVariant(viewerId, projectId, active.length);
+  return active[index].id;
+}
+
+/**
  * Generate a viewer ID (stored in localStorage/cookie on client).
  */
 export function generateViewerId(): string {

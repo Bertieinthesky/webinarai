@@ -17,6 +17,7 @@ import { useCallback, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import { SegmentPreviewDialog } from "@/components/project/SegmentPreviewDialog";
 import { formatFileSize, formatDuration } from "@/lib/utils/format";
 import type { SegmentType, Database } from "@/lib/supabase/types";
 
@@ -156,6 +157,7 @@ export function SegmentUploader({
   const [uploads, setUploads] = useState<UploadState[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [deleting, setDeleting] = useState<Set<string>>(new Set());
+  const [previewSegment, setPreviewSegment] = useState<Segment | null>(null);
   const config = typeConfig[type];
   const xhrMap = useRef<Map<File, XMLHttpRequest>>(new Map());
   const abortMap = useRef<Map<File, AbortController>>(new Map());
@@ -389,6 +391,18 @@ export function SegmentUploader({
               </p>
             </div>
             <div className="ml-2 flex items-center gap-2">
+              {/* Preview button */}
+              {(seg.normalized_storage_key || seg.original_storage_key) && (
+                <button
+                  onClick={() => setPreviewSegment(seg)}
+                  className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+                  title="Preview"
+                >
+                  <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+                    <polygon points="6,3 20,12 6,21" />
+                  </svg>
+                </button>
+              )}
               <span
                 className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${statusBadge[seg.status] || statusBadge.uploaded}`}
               >
@@ -532,6 +546,19 @@ export function SegmentUploader({
           </p>
         </div>
       </CardContent>
+
+      {/* Preview dialog */}
+      {previewSegment && (
+        <SegmentPreviewDialog
+          open={!!previewSegment}
+          onOpenChange={(open) => !open && setPreviewSegment(null)}
+          label={previewSegment.label}
+          storageKey={
+            previewSegment.normalized_storage_key ||
+            previewSegment.original_storage_key
+          }
+        />
+      )}
     </Card>
   );
 }

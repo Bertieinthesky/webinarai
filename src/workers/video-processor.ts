@@ -89,7 +89,8 @@ import {
   variantHlsInitSegmentKey, variantHlsSegmentKey,
 } from "../lib/storage/keys";
 import { getRedisConnection } from "../lib/queue/connection";
-import type { NormalizeJobData, RenderJobData, HlsPackageJobData } from "../lib/queue/types";
+import { splitVideoClip } from "../lib/video/split";
+import type { NormalizeJobData, RenderJobData, HlsPackageJobData, SplitJobData } from "../lib/queue/types";
 import type { Database } from "../lib/supabase/types";
 
 type Project = Database["public"]["Tables"]["projects"]["Row"];
@@ -149,6 +150,7 @@ const BUCKET = process.env.R2_BUCKET_NAME!;
 const NORMALIZE_TIMEOUT_MS = 45 * 60 * 1000;
 const RENDER_TIMEOUT_MS = 10 * 60 * 1000;
 const HLS_PACKAGE_TIMEOUT_MS = 30 * 60 * 1000;
+const SPLIT_TIMEOUT_MS = 20 * 60 * 1000;
 
 // ──────────────────────────────────────────
 // Helper: Structured logging with timing
@@ -877,6 +879,110 @@ async function processHlsPackage(job: Job<HlsPackageJobData>) {
 }
 
 // ──────────────────────────────────────────
+// SPLIT — Split a source video into clips
+// ──────────────────────────────────────────
+
+async function processSplit(job: Job<SplitJobData>) {
+  const { splitId, sourceStorageKey, clips } = job.data;
+  const workDir = join(tmpdir(), `wai-split-${job.id}`);
+  const startTime = Date.now();
+
+  try {
+    await mkdir(workDir, { recursive: true });
+    log("info", "split", job.id, `Starting split: ${clips.length} clips`, { splitId });
+
+    await supabase.from("splits").update({ status: "splitting" }).eq("id", splitId);
+
+    // Download source video
+    const inputPath = join(workDir, "source.mp4");
+    const sourceObj = await r2.send(
+      new GetObjectCommand({ Bucket: BUCKET, Key: sourceStorageKey })
+    );
+    const sourceBytes = await sourceObj.Body!.transformToByteArray();
+    await writeFile(inputPath, sourceBytes);
+    log("info", "split", job.id, `Downloaded source: ${(sourceBytes.length / 1024 / 1024).toFixed(1)}MB`);
+    await job.updateProgress(10);
+
+    // Split each clip
+    for (let i = 0; i < clips.length; i++) {
+      const clip = clips[i];
+      const outputPath = join(workDir, `clip-${clip.clipIndex}.mp4`);
+
+      try {
+        await splitVideoClip(inputPath, {
+          startMs: clip.startMs,
+          endMs: clip.endMs,
+          outputPath,
+        });
+
+        // Probe output for actual duration
+        const meta = await probeVideo(outputPath);
+
+        // Upload to R2
+        const clipBuffer = await readFile(outputPath);
+        await r2.send(
+          new PutObjectCommand({
+            Bucket: BUCKET,
+            Key: clip.outputStorageKey,
+            Body: clipBuffer,
+            ContentType: "video/mp4",
+          })
+        );
+
+        // Update clip record
+        await supabase
+          .from("split_clips")
+          .update({
+            status: "ready",
+            storage_key: clip.outputStorageKey,
+            size_bytes: clipBuffer.length,
+            duration_ms: meta.duration_ms,
+          })
+          .eq("id", clip.clipId);
+
+        log("info", "split", job.id, `Clip ${i + 1}/${clips.length} done: ${clip.label}`, {
+          sizeBytes: clipBuffer.length,
+          durationMs: meta.duration_ms,
+        });
+      } catch (clipErr) {
+        await supabase
+          .from("split_clips")
+          .update({
+            status: "failed",
+            error_message: clipErr instanceof Error ? clipErr.message : "Split failed",
+          })
+          .eq("id", clip.clipId);
+        throw clipErr;
+      }
+
+      const progress = 10 + Math.round(((i + 1) / clips.length) * 85);
+      await job.updateProgress(progress);
+    }
+
+    // Mark split complete
+    await supabase.from("splits").update({ status: "completed" }).eq("id", splitId);
+    await job.updateProgress(100);
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    log("info", "split", job.id, `Split complete in ${elapsed}s`, { clipCount: clips.length });
+  } catch (error) {
+    const isFinalAttempt = job.attemptsMade >= (job.opts.attempts ?? 3) - 1;
+    if (isFinalAttempt) {
+      await supabase
+        .from("splits")
+        .update({
+          status: "failed",
+          error_message: error instanceof Error ? error.message : "Split failed",
+        })
+        .eq("id", splitId);
+    }
+    throw error;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+// ──────────────────────────────────────────
 // Start workers
 // ──────────────────────────────────────────
 
@@ -890,7 +996,7 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
   // Step 1: Clean stale failed jobs from previous deploys
   try {
     const { Queue } = await import("bullmq");
-    for (const queueName of ["normalize", "render", "hls-package"]) {
+    for (const queueName of ["normalize", "render", "hls-package", "split"]) {
       const q = new Queue(queueName, { connection: getRedisConnection() });
       const failed = await q.getFailed();
       if (failed.length > 0) {
@@ -922,6 +1028,12 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
     connection: redisConn,
     concurrency: 1,
     lockDuration: HLS_PACKAGE_TIMEOUT_MS,
+  });
+
+  const splitWorker = new Worker("split", processSplit, {
+    connection: redisConn,
+    concurrency: 1,
+    lockDuration: SPLIT_TIMEOUT_MS,
   });
 
   normalizeWorker.on("completed", (job) => {
@@ -960,6 +1072,18 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
     log("error", "hls-package", undefined, `Worker error: ${err.message}`);
   });
 
+  splitWorker.on("completed", (job) => {
+    log("info", "split", job.id, "Job completed");
+  });
+
+  splitWorker.on("failed", (job, err) => {
+    log("error", "split", job?.id, `Job failed: ${err.message}`);
+  });
+
+  splitWorker.on("error", (err) => {
+    log("error", "split", undefined, `Worker error: ${err.message}`);
+  });
+
   console.log("[worker] Workers started successfully");
 
   // Graceful shutdown
@@ -968,6 +1092,7 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
     await normalizeWorker.close();
     await renderWorker.close();
     await hlsPackageWorker.close();
+    await splitWorker.close();
     process.exit(0);
   };
 

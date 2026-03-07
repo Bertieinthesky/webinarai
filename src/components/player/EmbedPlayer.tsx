@@ -174,14 +174,44 @@ export function EmbedPlayer({
   );
 }
 
-// Simple event tracking
-function trackEvent(event: string, variantId: string, projectSlug: string) {
+// Persistent viewer + session IDs
+function getViewerId(): string {
+  try {
+    let id = localStorage.getItem("wai_vid");
+    if (!id) {
+      id = "wai_" + Math.random().toString(36).slice(2, 18);
+      localStorage.setItem("wai_vid", id);
+    }
+    return id;
+  } catch {
+    return "wai_" + Math.random().toString(36).slice(2, 18);
+  }
+}
+
+function getSessionId(): string {
+  try {
+    let id = sessionStorage.getItem("wai_sid");
+    if (!id) {
+      id = "sid_" + Math.random().toString(36).slice(2, 14);
+      sessionStorage.setItem("wai_sid", id);
+    }
+    return id;
+  } catch {
+    return "sid_" + Math.random().toString(36).slice(2, 14);
+  }
+}
+
+// Event tracking with viewer context
+function trackEvent(event: string, variantId: string, _projectSlug: string) {
   try {
     const body = JSON.stringify({
       event,
       variantId,
-      projectSlug,
+      viewerId: getViewerId(),
+      sessionId: getSessionId(),
       timestamp: Date.now(),
+      referrer: typeof document !== "undefined" ? document.referrer : null,
+      userAgent: typeof navigator !== "undefined" ? navigator.userAgent : null,
     });
 
     if (navigator.sendBeacon) {

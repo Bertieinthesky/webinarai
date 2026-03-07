@@ -73,3 +73,21 @@ export interface HlsPackageJobData {
 export interface HlsPackageJobResult {
   hlsMasterManifestKey: string;
 }
+
+export interface SplitJobData {
+  splitId: string;
+  sourceStorageKey: string;
+  clips: Array<{
+    clipId: string;
+    clipIndex: number;
+    startMs: number;
+    endMs: number;
+    label: string;
+    outputStorageKey: string;
+  }>;
+}
+
+export interface SplitJobResult {
+  splitId: string;
+  clipCount: number;
+}

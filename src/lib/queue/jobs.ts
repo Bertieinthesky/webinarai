@@ -17,8 +17,8 @@
  *   - video-processor.ts worker (enqueues render jobs after normalization)
  */
 
-import { normalizeQueue, renderQueue, hlsPackageQueue } from "./queues";
-import type { NormalizeJobData, RenderJobData, HlsPackageJobData } from "./types";
+import { normalizeQueue, renderQueue, hlsPackageQueue, splitQueue } from "./queues";
+import type { NormalizeJobData, RenderJobData, HlsPackageJobData, SplitJobData } from "./types";
 
 export async function enqueueNormalize(data: NormalizeJobData) {
   return normalizeQueue.add(`normalize-${data.segmentId}`, data, {
@@ -35,5 +35,11 @@ export async function enqueueRender(data: RenderJobData) {
 export async function enqueueHlsPackage(data: HlsPackageJobData) {
   return hlsPackageQueue.add(`hls-package-${data.variantId}`, data, {
     jobId: `hls-package-${data.variantId}`,
+  });
+}
+
+export async function enqueueSplit(data: SplitJobData) {
+  return splitQueue.add(`split-${data.splitId}`, data, {
+    jobId: `split-${data.splitId}`,
   });
 }

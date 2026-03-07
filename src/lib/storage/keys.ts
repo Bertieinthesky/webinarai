@@ -115,6 +115,20 @@ export function variantHlsSegmentKey(
   return `${variantHlsPrefix(projectId, variantId)}/${rendition}/seg${padded}.m4s`;
 }
 
+// ─── Splitter keys ───
+
+export function splitSourceKey(splitId: string): string {
+  return `splits/${splitId}/source.mp4`;
+}
+
+export function splitClipKey(
+  splitId: string,
+  clipIndex: number
+): string {
+  const padded = String(clipIndex).padStart(3, "0");
+  return `splits/${splitId}/clips/clip-${padded}.mp4`;
+}
+
 export function tempWorkDir(jobId: string): string {
   return `temp/${jobId}`;
 }

@@ -25,7 +25,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { assignVariant, generateViewerId } from "@/lib/variant/assignment";
+import { assignVariantWeighted, generateViewerId } from "@/lib/variant/assignment";
 import { publicUrl } from "@/lib/storage/urls";
 import { variantPosterKey } from "@/lib/storage/keys";
 
@@ -53,11 +53,11 @@ export async function GET(
       );
     }
 
-    // Get rendered variants
+    // Get rendered variants with weights
     const { data: variants } = await admin
       .from("variants")
       .select(
-        "id, variant_code, video_storage_key, hook_clip_storage_key, hook_end_time_ms, video_duration_ms"
+        "id, variant_code, weight, video_storage_key, hook_clip_storage_key, hook_end_time_ms, video_duration_ms"
       )
       .eq("project_id", project.id)
       .eq("status", "rendered")
@@ -76,9 +76,17 @@ export async function GET(
       viewerId = generateViewerId();
     }
 
-    // Deterministic variant assignment
-    const variantIndex = assignVariant(viewerId, project.id, variants.length);
-    const variant = variants[variantIndex];
+    // Weight-aware variant assignment (skips disabled variants)
+    const assignedId = assignVariantWeighted(viewerId, project.id, variants);
+
+    if (!assignedId) {
+      return NextResponse.json(
+        { error: "No active variants available" },
+        { status: 404 }
+      );
+    }
+
+    const variant = variants.find((v) => v.id === assignedId)!;
 
     if (!variant.hook_clip_storage_key || !variant.video_storage_key) {
       return NextResponse.json(

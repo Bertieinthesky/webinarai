@@ -29,6 +29,8 @@
  *   are required by @supabase/supabase-js v2.98+ to satisfy its generic constraints.
  */
 
+export type SplitStatus = "uploaded" | "splitting" | "completed" | "failed";
+export type SplitClipStatus = "pending" | "ready" | "failed";
 export type SegmentType = "hook" | "body" | "cta";
 export type SegmentStatus =
   | "uploading"
@@ -38,6 +40,8 @@ export type SegmentStatus =
   | "failed";
 export type VariantStatus = "pending" | "rendering" | "rendered" | "failed";
 export type ProjectStatus = "draft" | "processing" | "ready" | "archived";
+export type MetricType = "url_rule" | "webhook";
+export type MatchType = "contains" | "exact" | "regex";
 
 export interface Database {
   public: {
@@ -185,6 +189,7 @@ export interface Database {
           status: VariantStatus;
           error_message: string | null;
           variant_code: string;
+          custom_name: string | null;
           weight: number;
           created_at: string;
           updated_at: string;
@@ -211,6 +216,7 @@ export interface Database {
           status?: VariantStatus;
           error_message?: string | null;
           variant_code: string;
+          custom_name?: string | null;
           weight?: number;
           created_at?: string;
           updated_at?: string;
@@ -237,6 +243,7 @@ export interface Database {
           status?: VariantStatus;
           error_message?: string | null;
           variant_code?: string;
+          custom_name?: string | null;
           weight?: number;
           created_at?: string;
           updated_at?: string;
@@ -330,9 +337,270 @@ export interface Database {
         };
         Relationships: [];
       };
+      splits: {
+        Row: {
+          id: string;
+          user_id: string;
+          name: string | null;
+          source_storage_key: string;
+          source_filename: string | null;
+          source_size_bytes: number | null;
+          source_duration_ms: number | null;
+          source_width: number | null;
+          source_height: number | null;
+          markers: unknown;
+          status: SplitStatus;
+          error_message: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          name?: string | null;
+          source_storage_key: string;
+          source_filename?: string | null;
+          source_size_bytes?: number | null;
+          source_duration_ms?: number | null;
+          source_width?: number | null;
+          source_height?: number | null;
+          markers?: unknown;
+          status?: SplitStatus;
+          error_message?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          name?: string | null;
+          source_storage_key?: string;
+          source_filename?: string | null;
+          source_size_bytes?: number | null;
+          source_duration_ms?: number | null;
+          source_width?: number | null;
+          source_height?: number | null;
+          markers?: unknown;
+          status?: SplitStatus;
+          error_message?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      split_clips: {
+        Row: {
+          id: string;
+          split_id: string;
+          clip_index: number;
+          label: string;
+          start_ms: number;
+          end_ms: number;
+          storage_key: string | null;
+          size_bytes: number | null;
+          duration_ms: number | null;
+          status: SplitClipStatus;
+          error_message: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          split_id: string;
+          clip_index: number;
+          label: string;
+          start_ms: number;
+          end_ms: number;
+          storage_key?: string | null;
+          size_bytes?: number | null;
+          duration_ms?: number | null;
+          status?: SplitClipStatus;
+          error_message?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          split_id?: string;
+          clip_index?: number;
+          label?: string;
+          start_ms?: number;
+          end_ms?: number;
+          storage_key?: string | null;
+          size_bytes?: number | null;
+          duration_ms?: number | null;
+          status?: SplitClipStatus;
+          error_message?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      view_events: {
+        Row: {
+          id: string;
+          project_id: string;
+          variant_id: string;
+          viewer_id: string;
+          session_id: string;
+          event_type: string;
+          timestamp_ms: number;
+          referrer: string | null;
+          user_agent: string | null;
+          country_code: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          project_id: string;
+          variant_id: string;
+          viewer_id: string;
+          session_id: string;
+          event_type: string;
+          timestamp_ms: number;
+          referrer?: string | null;
+          user_agent?: string | null;
+          country_code?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          project_id?: string;
+          variant_id?: string;
+          viewer_id?: string;
+          session_id?: string;
+          event_type?: string;
+          timestamp_ms?: number;
+          referrer?: string | null;
+          user_agent?: string | null;
+          country_code?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      custom_metrics: {
+        Row: {
+          id: string;
+          project_id: string;
+          name: string;
+          metric_type: MetricType;
+          url_pattern: string | null;
+          match_type: MatchType | null;
+          webhook_key: string | null;
+          description: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          project_id: string;
+          name: string;
+          metric_type?: MetricType;
+          url_pattern?: string | null;
+          match_type?: MatchType | null;
+          webhook_key?: string | null;
+          description?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          project_id?: string;
+          name?: string;
+          metric_type?: MetricType;
+          url_pattern?: string | null;
+          match_type?: MatchType | null;
+          webhook_key?: string | null;
+          description?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      custom_metric_events: {
+        Row: {
+          id: string;
+          metric_id: string;
+          project_id: string;
+          variant_id: string | null;
+          viewer_id: string;
+          session_id: string | null;
+          metadata: Record<string, unknown>;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          metric_id: string;
+          project_id: string;
+          variant_id?: string | null;
+          viewer_id: string;
+          session_id?: string | null;
+          metadata?: Record<string, unknown>;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          metric_id?: string;
+          project_id?: string;
+          variant_id?: string | null;
+          viewer_id?: string;
+          session_id?: string | null;
+          metadata?: Record<string, unknown>;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      get_variant_analytics: {
+        Args: {
+          p_project_id: string;
+          p_start_date?: string | null;
+          p_end_date?: string | null;
+        };
+        Returns: {
+          variant_id: string;
+          variant_code: string;
+          custom_name: string | null;
+          total_views: number;
+          unique_viewers: number;
+          play_count: number;
+          progress_25_count: number;
+          progress_50_count: number;
+          progress_75_count: number;
+          complete_count: number;
+          completion_rate: number;
+        }[];
+      };
+      get_segment_analytics: {
+        Args: {
+          p_project_id: string;
+          p_segment_type: string;
+          p_start_date?: string | null;
+          p_end_date?: string | null;
+        };
+        Returns: {
+          segment_id: string;
+          segment_label: string;
+          total_views: number;
+          unique_viewers: number;
+          complete_count: number;
+          completion_rate: number;
+        }[];
+      };
+      get_daily_views: {
+        Args: {
+          p_project_id: string;
+          p_start_date?: string | null;
+          p_end_date?: string | null;
+        };
+        Returns: {
+          day: string;
+          variant_id: string;
+          variant_code: string;
+          views: number;
+          completions: number;
+        }[];
+      };
+    };
     Enums: {
       segment_type: SegmentType;
       segment_status: SegmentStatus;
