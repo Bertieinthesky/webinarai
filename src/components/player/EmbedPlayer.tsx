@@ -43,7 +43,7 @@ interface EmbedPlayerProps {
   hookEndTimeMs: number;
   posterUrl?: string;
   variantId: string;
-  projectSlug: string;
+  projectSlug?: string;
 }
 
 export function EmbedPlayer({
@@ -52,7 +52,6 @@ export function EmbedPlayer({
   hookEndTimeMs,
   posterUrl,
   variantId,
-  projectSlug,
 }: EmbedPlayerProps) {
   const [hasInteracted, setHasInteracted] = useState(false);
 
@@ -69,16 +68,16 @@ export function EmbedPlayer({
     hookEndTimeMs,
     onPlay: () => {
       // Track play event
-      trackEvent("play", variantId, projectSlug);
+      trackEvent("play", variantId);
     },
     onProgress: (pct) => {
       // Track milestone events
       if (pct === 25 || pct === 50 || pct === 75) {
-        trackEvent(`progress_${pct}`, variantId, projectSlug);
+        trackEvent(`progress_${pct}`, variantId);
       }
     },
     onComplete: () => {
-      trackEvent("complete", variantId, projectSlug);
+      trackEvent("complete", variantId);
     },
   });
 
@@ -202,7 +201,7 @@ function getSessionId(): string {
 }
 
 // Event tracking with viewer context
-function trackEvent(event: string, variantId: string, _projectSlug: string) {
+function trackEvent(event: string, variantId: string) {
   try {
     const body = JSON.stringify({
       event,
