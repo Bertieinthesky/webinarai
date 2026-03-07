@@ -87,7 +87,6 @@ function getBufferedAhead(video: HTMLVideoElement): number {
 export function useSmartSync({
   hookClipUrl,
   fullVideoUrl,
-  hookPreloaded,
   hlsManifestUrl,
   onPlay,
   onProgress,

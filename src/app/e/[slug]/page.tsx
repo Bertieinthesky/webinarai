@@ -22,7 +22,7 @@ import { cookies, headers } from "next/headers";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { assignVariant, generateViewerId } from "@/lib/variant/assignment";
 import { publicUrl } from "@/lib/storage/urls";
-import { variantPosterKey, variantMicroSegmentKey } from "@/lib/storage/keys";
+import { variantPosterKey } from "@/lib/storage/keys";
 import { EmbedClient } from "./EmbedClient";
 
 export default async function EmbedPage({

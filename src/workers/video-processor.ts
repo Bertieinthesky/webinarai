@@ -85,7 +85,7 @@ import { packageRendition, generateMasterPlaylist, HLS_RENDITIONS } from "../lib
 import {
   normalizedSegmentKey, variantVideoKey, variantHookClipKey, variantPosterKey,
   variantMicroSegmentKey, variant720pVideoKey,
-  variantHlsPrefix, variantHlsMasterKey, variantHlsRenditionPlaylistKey,
+  variantHlsMasterKey, variantHlsRenditionPlaylistKey,
   variantHlsInitSegmentKey, variantHlsSegmentKey,
 } from "../lib/storage/keys";
 import { getRedisConnection } from "../lib/queue/connection";
