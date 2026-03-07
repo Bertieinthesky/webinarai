@@ -8,7 +8,6 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { formatFileSize } from "@/lib/utils/format";
 import { Progress } from "@/components/ui/progress";
 
 interface SplitterUploaderProps {
