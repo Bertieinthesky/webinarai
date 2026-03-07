@@ -5,7 +5,7 @@ FROM node:20-slim
 # BtbN static builds which include everything (libvmaf, x264, x265, etc.)
 # These are statically linked — no runtime dependencies needed.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends wget xz-utils && \
+    apt-get install -y --no-install-recommends ca-certificates wget xz-utils && \
     wget -q https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz -O /tmp/ffmpeg.tar.xz && \
     tar -xJf /tmp/ffmpeg.tar.xz -C /tmp && \
     cp /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffmpeg /usr/local/bin/ && \
