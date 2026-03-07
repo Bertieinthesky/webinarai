@@ -91,3 +91,14 @@ export interface SplitJobResult {
   splitId: string;
   clipCount: number;
 }
+
+export interface AnalyzeJobData {
+  splitId: string;
+  sourceStorageKey: string;
+  threshold?: number; // scene detection threshold, default 0.3
+}
+
+export interface AnalyzeJobResult {
+  splitId: string;
+  pointCount: number;
+}

@@ -349,6 +349,7 @@ export interface Database {
           source_width: number | null;
           source_height: number | null;
           markers: unknown;
+          scene_points: unknown[] | null;
           status: SplitStatus;
           error_message: string | null;
           created_at: string;
@@ -365,6 +366,7 @@ export interface Database {
           source_width?: number | null;
           source_height?: number | null;
           markers?: unknown;
+          scene_points?: unknown[] | null;
           status?: SplitStatus;
           error_message?: string | null;
           created_at?: string;
@@ -381,6 +383,7 @@ export interface Database {
           source_width?: number | null;
           source_height?: number | null;
           markers?: unknown;
+          scene_points?: unknown[] | null;
           status?: SplitStatus;
           error_message?: string | null;
           created_at?: string;

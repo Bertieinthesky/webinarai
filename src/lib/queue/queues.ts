@@ -22,7 +22,7 @@
 
 import { Queue } from "bullmq";
 import { getRedisConnection } from "./connection";
-import type { NormalizeJobData, RenderJobData, HlsPackageJobData, SplitJobData } from "./types";
+import type { NormalizeJobData, RenderJobData, HlsPackageJobData, SplitJobData, AnalyzeJobData } from "./types";
 
 export const normalizeQueue = new Queue<NormalizeJobData>("normalize", {
   connection: getRedisConnection(),
@@ -59,6 +59,16 @@ export const splitQueue = new Queue<SplitJobData>("split", {
   defaultJobOptions: {
     attempts: 3,
     backoff: { type: "exponential", delay: 1000 },
+    removeOnComplete: { age: 86400 },
+    removeOnFail: { age: 604800 },
+  },
+});
+
+export const analyzeQueue = new Queue<AnalyzeJobData>("analyze", {
+  connection: getRedisConnection(),
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: { type: "exponential", delay: 2000 },
     removeOnComplete: { age: 86400 },
     removeOnFail: { age: 604800 },
   },
