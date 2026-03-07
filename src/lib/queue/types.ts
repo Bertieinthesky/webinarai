@@ -14,9 +14,14 @@
  *      normalized R2 keys + hook duration. Output: video R2 key + hook clip
  *      R2 key + metadata.
  *
+ *   3. HLS_PACKAGE: Packages a rendered variant MP4 into HLS adaptive
+ *      bitrate streams (1080p, 720p, 480p). Runs as a separate background
+ *      job after render completes. Best-effort — failure doesn't affect
+ *      the variant's "rendered" status.
+ *
  * USED BY:
- *   - queues.ts (Queue<NormalizeJobData>, Queue<RenderJobData>)
- *   - jobs.ts (enqueueNormalize, enqueueRender)
+ *   - queues.ts (Queue<NormalizeJobData>, Queue<RenderJobData>, Queue<HlsPackageJobData>)
+ *   - jobs.ts (enqueueNormalize, enqueueRender, enqueueHlsPackage)
  *   - video-processor.ts worker (processes jobs and returns results)
  *   - process/route.ts API (creates job payloads)
  */
@@ -57,4 +62,14 @@ export interface RenderJobResult {
   hookClipSizeBytes: number;
   hookClipDurationMs: number;
   hookEndTimeMs: number;
+}
+
+export interface HlsPackageJobData {
+  projectId: string;
+  variantId: string;
+  videoStorageKey: string;
+}
+
+export interface HlsPackageJobResult {
+  hlsMasterManifestKey: string;
 }

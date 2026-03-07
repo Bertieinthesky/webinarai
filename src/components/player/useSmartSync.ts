@@ -13,6 +13,16 @@
  *   at opacity:1 and the hook simply sits ON TOP via z-index. The browser
  *   actively decodes both because both are "visible." Swap = flip z-index.
  *
+ * BANDWIDTH OPTIMIZATION (v2.2):
+ *   On mobile, loading both videos simultaneously splits bandwidth and causes
+ *   the full video to buffer too slowly. New approach:
+ *   1. Set full video src on mount but preload="none" (no download)
+ *   2. On play click: start hook immediately, then start full video
+ *   3. If hook is blob-preloaded, it plays from memory (zero bandwidth),
+ *      giving 100% of bandwidth to the full video for buffering
+ *   4. Monitor full video buffer health — if it hasn't buffered past the
+ *      hook duration by swap time, extend the hook or wait
+ *
  * FRAME-LEVEL SYNC (requestVideoFrameCallback):
  *   Uses the browser's requestVideoFrameCallback API to get exact media
  *   presentation timestamps for each frame. Compares both videos' mediaTime
@@ -30,6 +40,7 @@
 "use client";
 
 import { useRef, useState, useCallback, useEffect, useMemo } from "react";
+import { useHls } from "./useHls";
 
 export type SmartSyncPhase =
   | "idle"
@@ -44,6 +55,10 @@ interface UseSmartSyncOptions {
   hookClipUrl: string;
   fullVideoUrl: string;
   hookEndTimeMs: number;
+  /** Whether the hook clip has been fully preloaded as a blob */
+  hookPreloaded?: boolean;
+  /** HLS manifest URL for adaptive streaming (full video only) */
+  hlsManifestUrl?: string;
   onPlay?: () => void;
   onProgress?: (percent: number) => void;
   onComplete?: () => void;
@@ -54,15 +69,33 @@ function supportsRVFC(el: HTMLVideoElement): boolean {
   return "requestVideoFrameCallback" in el;
 }
 
+/**
+ * Check if a video has buffered enough to play through a given time.
+ * Returns the furthest buffered time from the current position.
+ */
+function getBufferedAhead(video: HTMLVideoElement): number {
+  const buffered = video.buffered;
+  const current = video.currentTime;
+  for (let i = 0; i < buffered.length; i++) {
+    if (buffered.start(i) <= current && buffered.end(i) > current) {
+      return buffered.end(i) - current;
+    }
+  }
+  return 0;
+}
+
 export function useSmartSync({
   hookClipUrl,
   fullVideoUrl,
+  hookPreloaded,
+  hlsManifestUrl,
   onPlay,
   onProgress,
   onComplete,
 }: UseSmartSyncOptions) {
   const hookRef = useRef<HTMLVideoElement>(null);
   const fullRef = useRef<HTMLVideoElement>(null);
+  const { attachHls, detachHls } = useHls();
   const [phase, setPhase] = useState<SmartSyncPhase>("idle");
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -84,6 +117,10 @@ export function useSmartSync({
   );
 
   // Load sources on mount
+  // KEY CHANGE (v2.2): Hook loads immediately with preload="auto".
+  // Full video gets its src set but preload="none" — it won't download
+  // anything until we explicitly call .load() when the user clicks play.
+  // This gives all bandwidth to the hook clip for instant preloading.
   useEffect(() => {
     if (!hookClipUrl || !fullVideoUrl) return;
 
@@ -102,18 +139,24 @@ export function useSmartSync({
     full.style.opacity = "1";
     full.style.transition = "";
 
-    // Set sources — both start at 0:00
+    // Hook: load immediately (small file, or blob-preloaded)
     hook.src = hookClipUrl;
     hook.preload = "auto";
     hook.load();
 
-    full.src = fullVideoUrl;
-    full.preload = "auto";
+    // Full: set src but DON'T download yet — save bandwidth for hook
+    // When HLS is available, don't set src at all — attachHls will handle it on play
+    if (!hlsManifestUrl) {
+      full.src = fullVideoUrl;
+    }
+    full.preload = "none";
     full.muted = true;
-    full.load();
+    // Don't call full.load() — we'll do that on play click
 
     setPhase("loading");
-  }, [hookClipUrl, fullVideoUrl]);
+
+    return () => { detachHls(); };
+  }, [hookClipUrl, fullVideoUrl, hlsManifestUrl, detachHls]);
 
   // Swap function — extracted so it can be called from RVFC (early) or ended (fallback)
   const doSwapRef = useRef<(() => void) | null>(null);
@@ -248,14 +291,23 @@ export function useSmartSync({
         // Early swap: trigger 150ms BEFORE hook ends to avoid the
         // ended-state frame artifact. At this point both videos are
         // still actively playing the same content — swap is invisible.
+        //
+        // BUFFER CHECK (v2.2): Only swap if full video has buffered
+        // enough frames ahead. If not, let the hook play to its end
+        // and the 'ended' fallback will handle the swap.
         if (
           hook.duration > 0 &&
           metadata.mediaTime >= hook.duration - 0.15 &&
           !swappedRef.current &&
           doSwapRef.current
         ) {
-          doSwapRef.current();
-          return; // Don't schedule another frame callback
+          const fullBufferAhead = getBufferedAhead(full);
+          if (fullBufferAhead >= 1.0) {
+            // Full video has at least 1s of buffer ahead — safe to swap
+            doSwapRef.current();
+            return; // Don't schedule another frame callback
+          }
+          // Otherwise, let hook play to end — 'ended' fallback will swap
         }
 
         if (syncActiveRef.current) {
@@ -292,15 +344,18 @@ export function useSmartSync({
         if (!syncActiveRef.current) return;
         if (hook.paused || full.paused) return;
 
-        // Early swap: trigger 150ms before hook ends (same as RVFC path)
+        // Early swap with buffer check (same as RVFC path)
         if (
           hook.duration > 0 &&
           hook.currentTime >= hook.duration - 0.15 &&
           !swappedRef.current &&
           doSwapRef.current
         ) {
-          doSwapRef.current();
-          return;
+          const fullBufferAhead = getBufferedAhead(full);
+          if (fullBufferAhead >= 1.0) {
+            doSwapRef.current();
+            return;
+          }
         }
 
         const drift = hook.currentTime - full.currentTime;
@@ -389,26 +444,42 @@ export function useSmartSync({
       // Hook plays with audio on top
       hook.currentTime = 0;
 
-      // Play both — hook audio is what the viewer hears
-      // Start full video first so it has a head start on buffering,
-      // then start hook. This compensates for blob-preloaded hooks
-      // that would otherwise race ahead of CDN-streamed full videos.
-      const fullPlay = full.play();
+      // KEY CHANGE (v2.2): Now load the full video.
+      // We deferred loading until play click so the hook clip got all
+      // bandwidth during page load. If the hook was blob-preloaded,
+      // the full video now gets 100% of bandwidth.
+      if (hlsManifestUrl) {
+        // HLS: attach via hls.js (Chrome/Firefox) or native (Safari)
+        attachHls(full, hlsManifestUrl, fullVideoUrl);
+      } else {
+        full.preload = "auto";
+        full.load();
+      }
+
+      // Start hook first — it's preloaded (blob or cached), so it plays instantly.
+      // Start full video after a short delay to let its metadata load.
       const hookPlay = hook.play();
 
-      Promise.all([hookPlay, fullPlay])
+      hookPlay
         .then(() => {
-          // Force-sync: if hook got ahead (blob preload), snap full video
-          // to match. At this early point (~0-500ms in), seeking is instant
-          // since the start of the video is always buffered first.
-          const drift = hook.currentTime - full.currentTime;
-          if (drift > 0.05) {
-            full.currentTime = hook.currentTime;
-          }
           setPhase("playing_hook");
           onPlay?.();
+
+          // Start full video after hook is playing.
+          // The hook is already rendering frames, so the poster is gone
+          // and the viewer sees video. Full video loads underneath.
+          full.play().catch(() => {
+            // If full video can't play yet (still loading metadata),
+            // wait for canplay event then start
+            const onCanPlay = () => {
+              full.play().catch(() => {});
+              full.removeEventListener("canplay", onCanPlay);
+            };
+            full.addEventListener("canplay", onCanPlay);
+          });
         })
         .catch(() => {
+          // Autoplay blocked — try again (some browsers need user gesture)
           hook
             .play()
             .then(() => {
@@ -468,7 +539,7 @@ export function useSmartSync({
       setPhase("playing_hook");
       onPlay?.();
     }
-  }, [phase, onPlay]);
+  }, [phase, onPlay, hlsManifestUrl, fullVideoUrl, attachHls]);
 
   return {
     hookRef,

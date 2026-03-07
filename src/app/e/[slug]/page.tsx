@@ -18,11 +18,11 @@
  *   the /e/* public route pattern. Designed for iframe embedding.
  */
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { assignVariant, generateViewerId } from "@/lib/variant/assignment";
 import { publicUrl } from "@/lib/storage/urls";
-import { variantPosterKey } from "@/lib/storage/keys";
+import { variantPosterKey, variantMicroSegmentKey } from "@/lib/storage/keys";
 import { EmbedClient } from "./EmbedClient";
 
 export default async function EmbedPage({
@@ -54,11 +54,16 @@ export default async function EmbedPage({
       return <EmbedError message="Video not available" />;
     }
 
+    // Detect mobile from User-Agent for 720p serving
+    const headerStore = await headers();
+    const userAgent = headerStore.get("user-agent") || "";
+    const isMobile = /iPhone|iPad|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
+
     // Get rendered variants
     const { data: variants } = await admin
       .from("variants")
       .select(
-        "id, variant_code, video_storage_key, hook_clip_storage_key, hook_end_time_ms, video_duration_ms"
+        "id, variant_code, video_storage_key, hook_clip_storage_key, hook_end_time_ms, video_duration_ms, micro_segment_storage_key, video_720p_storage_key, hls_master_manifest_key, hls_status"
       )
       .eq("project_id", project.id)
       .eq("status", "rendered")
@@ -76,20 +81,48 @@ export default async function EmbedPage({
       return <EmbedError message="Video not available" />;
     }
 
+    const hookUrl = publicUrl(variant.hook_clip_storage_key);
+    const poster = publicUrl(variantPosterKey(project.id, variant.id));
+
+    // Mobile gets 720p if available, otherwise falls back to 1080p
+    const fullVideoUrl = isMobile && variant.video_720p_storage_key
+      ? publicUrl(variant.video_720p_storage_key)
+      : publicUrl(variant.video_storage_key);
+
+    // Micro-segment URL for turbo start (toggle via ?turbo=1 in embed URL)
+    const microSegmentUrl = variant.micro_segment_storage_key
+      ? publicUrl(variant.micro_segment_storage_key)
+      : undefined;
+
+    // HLS manifest URL for adaptive streaming (only when packaging is complete)
+    const hlsManifestUrl =
+      variant.hls_status === "ready" && variant.hls_master_manifest_key
+        ? publicUrl(variant.hls_master_manifest_key)
+        : undefined;
+
     return (
-      <EmbedClient
-        data={{
-          projectId: project.id,
-          variantId: variant.id,
-          variantCode: variant.variant_code,
-          hookClipUrl: publicUrl(variant.hook_clip_storage_key),
-          fullVideoUrl: publicUrl(variant.video_storage_key),
-          posterUrl: publicUrl(variantPosterKey(project.id, variant.id)),
-          hookEndTimeMs: variant.hook_end_time_ms ?? 0,
-          totalDurationMs: variant.video_duration_ms ?? 0,
-        }}
-        slug={slug}
-      />
+      <>
+        {/* Preload hint — browser starts fetching these from the raw HTML,
+            before any JS bundle loads. Saves 200-500ms on first paint. */}
+        <link rel="preload" href={poster} as="image" />
+        <link rel="preload" href={hookUrl} as="video" type="video/mp4" />
+
+        <EmbedClient
+          data={{
+            projectId: project.id,
+            variantId: variant.id,
+            variantCode: variant.variant_code,
+            hookClipUrl: hookUrl,
+            fullVideoUrl,
+            posterUrl: poster,
+            hookEndTimeMs: variant.hook_end_time_ms ?? 0,
+            totalDurationMs: variant.video_duration_ms ?? 0,
+            microSegmentUrl,
+            hlsManifestUrl,
+          }}
+          slug={slug}
+        />
+      </>
     );
   } catch {
     return <EmbedError message="Failed to load video" />;

@@ -176,6 +176,12 @@ export interface Database {
           hook_clip_size_bytes: number | null;
           hook_clip_duration_ms: number | null;
           hook_end_time_ms: number | null;
+          micro_segment_storage_key: string | null;
+          video_720p_storage_key: string | null;
+          video_720p_size_bytes: number | null;
+          hls_master_manifest_key: string | null;
+          hls_status: string | null;
+          hls_error_message: string | null;
           status: VariantStatus;
           error_message: string | null;
           variant_code: string;
@@ -196,6 +202,12 @@ export interface Database {
           hook_clip_size_bytes?: number | null;
           hook_clip_duration_ms?: number | null;
           hook_end_time_ms?: number | null;
+          micro_segment_storage_key?: string | null;
+          video_720p_storage_key?: string | null;
+          video_720p_size_bytes?: number | null;
+          hls_master_manifest_key?: string | null;
+          hls_status?: string | null;
+          hls_error_message?: string | null;
           status?: VariantStatus;
           error_message?: string | null;
           variant_code: string;
@@ -216,6 +228,12 @@ export interface Database {
           hook_clip_size_bytes?: number | null;
           hook_clip_duration_ms?: number | null;
           hook_end_time_ms?: number | null;
+          micro_segment_storage_key?: string | null;
+          video_720p_storage_key?: string | null;
+          video_720p_size_bytes?: number | null;
+          hls_master_manifest_key?: string | null;
+          hls_status?: string | null;
+          hls_error_message?: string | null;
           status?: VariantStatus;
           error_message?: string | null;
           variant_code?: string;

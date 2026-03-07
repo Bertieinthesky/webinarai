@@ -17,8 +17,8 @@
  *   - video-processor.ts worker (enqueues render jobs after normalization)
  */
 
-import { normalizeQueue, renderQueue } from "./queues";
-import type { NormalizeJobData, RenderJobData } from "./types";
+import { normalizeQueue, renderQueue, hlsPackageQueue } from "./queues";
+import type { NormalizeJobData, RenderJobData, HlsPackageJobData } from "./types";
 
 export async function enqueueNormalize(data: NormalizeJobData) {
   return normalizeQueue.add(`normalize-${data.segmentId}`, data, {
@@ -29,5 +29,11 @@ export async function enqueueNormalize(data: NormalizeJobData) {
 export async function enqueueRender(data: RenderJobData) {
   return renderQueue.add(`render-${data.variantId}`, data, {
     jobId: `render-${data.variantId}`,
+  });
+}
+
+export async function enqueueHlsPackage(data: HlsPackageJobData) {
+  return hlsPackageQueue.add(`hls-package-${data.variantId}`, data, {
+    jobId: `hls-package-${data.variantId}`,
   });
 }

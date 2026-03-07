@@ -78,9 +78,18 @@ import { probeVideo } from "../lib/video/ffprobe";
 import { DEFAULT_SPEC, needsNormalization } from "../lib/video/specs";
 import { extractPosterFrame } from "../lib/video/extract-poster";
 import { runFFmpeg } from "../lib/video/commands";
-import { normalizedSegmentKey, variantVideoKey, variantHookClipKey, variantPosterKey } from "../lib/storage/keys";
+import { findOptimalCrf } from "../lib/video/vmaf";
+import { extractMicroSegment } from "../lib/video/extract-micro-segment";
+import { encode720p } from "../lib/video/encode-720p";
+import { packageRendition, generateMasterPlaylist, HLS_RENDITIONS } from "../lib/video/hls-package";
+import {
+  normalizedSegmentKey, variantVideoKey, variantHookClipKey, variantPosterKey,
+  variantMicroSegmentKey, variant720pVideoKey,
+  variantHlsPrefix, variantHlsMasterKey, variantHlsRenditionPlaylistKey,
+  variantHlsInitSegmentKey, variantHlsSegmentKey,
+} from "../lib/storage/keys";
 import { getRedisConnection } from "../lib/queue/connection";
-import type { NormalizeJobData, RenderJobData } from "../lib/queue/types";
+import type { NormalizeJobData, RenderJobData, HlsPackageJobData } from "../lib/queue/types";
 import type { Database } from "../lib/supabase/types";
 
 type Project = Database["public"]["Tables"]["projects"]["Row"];
@@ -135,9 +144,11 @@ const r2 = new S3Client({
 
 const BUCKET = process.env.R2_BUCKET_NAME!;
 
-// Job timeout: 45 minutes for normalize (long videos), 10 minutes for render (stream-copy)
+// Job timeout: 45 minutes for normalize (long videos), 10 minutes for render (stream-copy),
+// 30 minutes for HLS packaging (re-encodes 720p + 480p renditions)
 const NORMALIZE_TIMEOUT_MS = 45 * 60 * 1000;
 const RENDER_TIMEOUT_MS = 10 * 60 * 1000;
+const HLS_PACKAGE_TIMEOUT_MS = 30 * 60 * 1000;
 
 // ──────────────────────────────────────────
 // Helper: Structured logging with timing
@@ -306,7 +317,31 @@ async function processNormalize(job: Job<NormalizeJobData>) {
         reasons: check.reasons,
         durationMs: metadata.duration_ms,
       });
-      await normalizeVideo(inputPath, outputPath, spec);
+
+      // VMAF-targeted encoding: find the optimal CRF for this content.
+      // Binary-searches on a 15-second sample (~30-60 sec overhead).
+      // Falls back to the default CRF if VMAF is unavailable.
+      let optimizedSpec = spec;
+      try {
+        const durationSec = (metadata.duration_ms || 30000) / 1000;
+        const { crf, vmafScore } = await findOptimalCrf(
+          inputPath,
+          spec,
+          durationSec,
+          workDir,
+          (msg) => log("info", "normalize", job.id, msg)
+        );
+        optimizedSpec = { ...spec, crf };
+        log("info", "normalize", job.id, `VMAF optimization: CRF ${spec.crf} -> ${crf} (VMAF ${vmafScore.toFixed(1)})`, {
+          defaultCrf: spec.crf,
+          optimizedCrf: crf,
+          vmafScore: Math.round(vmafScore * 10) / 10,
+        });
+      } catch (vmafErr) {
+        log("warn", "normalize", job.id, `VMAF optimization skipped, using default CRF ${spec.crf}: ${vmafErr instanceof Error ? vmafErr.message : String(vmafErr)}`);
+      }
+
+      await normalizeVideo(inputPath, outputPath, optimizedSpec);
     } else {
       log("info", "normalize", job.id, `Specs match — remuxing only (skipping re-encode) for ${segmentId}`, {
         durationMs: metadata.duration_ms,
@@ -535,6 +570,12 @@ async function processRender(job: Job<RenderJobData>) {
     await extractHookClip(variantPath, hookClipPath, hookDurationMs);
     log("info", "render", job.id, `Extracting poster frame for variant ${variantId}`);
     await extractPosterFrame(variantPath, posterPath);
+
+    // Extract micro-segment (first 1.5s, stream-copy → instant)
+    const microSegmentPath = join(workDir, "micro-segment.mp4");
+    log("info", "render", job.id, `Extracting micro-segment for variant ${variantId}`);
+    await extractMicroSegment(variantPath, microSegmentPath);
+
     await job.updateProgress(60);
     await updateJobProgress(variantId, "render", 60);
 
@@ -560,10 +601,16 @@ async function processRender(job: Job<RenderJobData>) {
     const posterKey = variantPosterKey(projectId, variantId);
     log("info", "render", job.id, `Uploading poster to ${posterKey}`);
     await uploadToR2(posterPath, posterKey, "image/jpeg");
+
+    // Upload micro-segment
+    const microSegmentKey = variantMicroSegmentKey(projectId, variantId);
+    log("info", "render", job.id, `Uploading micro-segment to ${microSegmentKey}`);
+    await uploadToR2(microSegmentPath, microSegmentKey);
+
     await job.updateProgress(90);
     await updateJobProgress(variantId, "render", 90);
 
-    // Update variant record
+    // Update variant record (mark rendered — core pipeline complete)
     await supabase
       .from("variants")
       .update({
@@ -575,8 +622,50 @@ async function processRender(job: Job<RenderJobData>) {
         hook_clip_size_bytes: hookClipSize,
         hook_clip_duration_ms: hookClipMeta.duration_ms,
         hook_end_time_ms: hookDurationMs,
+        micro_segment_storage_key: microSegmentKey,
       })
       .eq("id", variantId);
+
+    // Best-effort: encode 720p mobile rendition
+    // This is a re-encode (takes real time) so it runs AFTER the variant is
+    // marked rendered. If it fails, mobile falls back to 1080p.
+    try {
+      const video720pPath = join(workDir, "video-720p.mp4");
+      log("info", "render", job.id, `Encoding 720p rendition for variant ${variantId}`);
+      await encode720p(variantPath, video720pPath);
+
+      const video720pKey = variant720pVideoKey(projectId, variantId);
+      const video720pSize = await uploadToR2(video720pPath, video720pKey);
+
+      await supabase
+        .from("variants")
+        .update({
+          video_720p_storage_key: video720pKey,
+          video_720p_size_bytes: video720pSize,
+        })
+        .eq("id", variantId);
+
+      log("info", "render", job.id, `720p rendition complete (${(video720pSize / 1024 / 1024).toFixed(1)}MB)`);
+    } catch (err720) {
+      log("warn", "render", job.id, `720p encoding skipped (non-blocking): ${err720 instanceof Error ? err720.message : String(err720)}`);
+    }
+
+    // Best-effort: enqueue HLS adaptive streaming packaging
+    try {
+      const { Queue } = await import("bullmq");
+      const hlsQueue = new Queue("hls-package", { connection: getRedisConnection() });
+      await hlsQueue.add(`hls-package-${variantId}`, {
+        projectId,
+        variantId,
+        videoStorageKey: videoKey,
+      } satisfies HlsPackageJobData, {
+        jobId: `hls-package-${variantId}`,
+      });
+      await hlsQueue.close();
+      log("info", "render", job.id, `Enqueued HLS packaging for variant ${variantId}`);
+    } catch (hlsErr) {
+      log("warn", "render", job.id, `HLS enqueue skipped (non-blocking): ${hlsErr instanceof Error ? hlsErr.message : String(hlsErr)}`);
+    }
 
     // Update processing job
     await supabase
@@ -658,6 +747,136 @@ async function checkProjectComplete(projectId: string) {
 }
 
 // ──────────────────────────────────────────
+// HLS PACKAGE WORKER
+// ──────────────────────────────────────────
+
+async function processHlsPackage(job: Job<HlsPackageJobData>) {
+  const { projectId, variantId, videoStorageKey } = job.data;
+  const workDir = join(tmpdir(), `wai-hls-${job.id}`);
+  const startTime = Date.now();
+
+  try {
+    await mkdir(workDir, { recursive: true });
+
+    // Mark HLS status as packaging
+    await supabase
+      .from("variants")
+      .update({ hls_status: "packaging" })
+      .eq("id", variantId);
+
+    // Download source MP4
+    const inputPath = join(workDir, "source.mp4");
+    log("info", "hls-package", job.id, `Downloading source video for variant ${variantId}`);
+    await downloadFromR2(videoStorageKey, inputPath);
+    await job.updateProgress(10);
+
+    // Package each rendition (1080p, 720p, 480p)
+    const hlsDir = join(workDir, "hls");
+    await mkdir(hlsDir, { recursive: true });
+
+    for (let i = 0; i < HLS_RENDITIONS.length; i++) {
+      const rendition = HLS_RENDITIONS[i];
+      log("info", "hls-package", job.id, `Packaging ${rendition.name} rendition for variant ${variantId}`);
+      await packageRendition(inputPath, hlsDir, rendition);
+      await job.updateProgress(10 + Math.round(((i + 1) / HLS_RENDITIONS.length) * 60));
+    }
+
+    // Generate master playlist
+    log("info", "hls-package", job.id, `Generating master playlist for variant ${variantId}`);
+    await generateMasterPlaylist(hlsDir, HLS_RENDITIONS);
+    await job.updateProgress(75);
+
+    // Upload all HLS files to R2
+    log("info", "hls-package", job.id, `Uploading HLS files for variant ${variantId}`);
+    const { readdir, stat } = await import("fs/promises");
+
+    // Upload master.m3u8
+    const masterKey = variantHlsMasterKey(projectId, variantId);
+    await uploadToR2(join(hlsDir, "master.m3u8"), masterKey, "application/vnd.apple.mpegurl");
+
+    // Upload each rendition's files
+    for (const rendition of HLS_RENDITIONS) {
+      const renditionDir = join(hlsDir, rendition.name);
+      const files = await readdir(renditionDir);
+
+      // Batch uploads: up to 20 concurrent
+      const uploadBatch: Promise<number>[] = [];
+      for (const file of files) {
+        const localPath = join(renditionDir, file);
+        const fileStat = await stat(localPath);
+        if (!fileStat.isFile()) continue;
+
+        let r2Key: string;
+        let contentType: string;
+
+        if (file === "playlist.m3u8") {
+          r2Key = variantHlsRenditionPlaylistKey(projectId, variantId, rendition.name);
+          contentType = "application/vnd.apple.mpegurl";
+        } else if (file === "init.mp4") {
+          r2Key = variantHlsInitSegmentKey(projectId, variantId, rendition.name);
+          contentType = "video/mp4";
+        } else if (file.endsWith(".m4s")) {
+          // Extract segment index from "seg000.m4s"
+          const match = file.match(/seg(\d+)\.m4s$/);
+          if (!match) continue;
+          r2Key = variantHlsSegmentKey(projectId, variantId, rendition.name, parseInt(match[1], 10));
+          contentType = "video/mp4";
+        } else {
+          continue;
+        }
+
+        uploadBatch.push(uploadToR2(localPath, r2Key, contentType));
+
+        // Flush batch at 20 concurrent uploads
+        if (uploadBatch.length >= 20) {
+          await Promise.all(uploadBatch);
+          uploadBatch.length = 0;
+        }
+      }
+      // Flush remaining
+      if (uploadBatch.length > 0) {
+        await Promise.all(uploadBatch);
+      }
+    }
+
+    await job.updateProgress(95);
+
+    // Update variant with HLS info
+    await supabase
+      .from("variants")
+      .update({
+        hls_master_manifest_key: masterKey,
+        hls_status: "ready",
+      })
+      .eq("id", variantId);
+
+    await job.updateProgress(100);
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    log("info", "hls-package", job.id, `HLS packaging complete for variant ${variantId}`, { elapsedSec: elapsed });
+  } catch (error) {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    log("error", "hls-package", job.id, `HLS packaging failed for variant ${variantId}`, {
+      elapsedSec: elapsed,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+
+    // Mark HLS as failed (variant stays "rendered" — MP4 playback unaffected)
+    await supabase
+      .from("variants")
+      .update({
+        hls_status: "failed",
+        hls_error_message: error instanceof Error ? error.message : "HLS packaging failed",
+      })
+      .eq("id", variantId);
+
+    throw error;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+// ──────────────────────────────────────────
 // Start workers
 // ──────────────────────────────────────────
 
@@ -671,7 +890,7 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
   // Step 1: Clean stale failed jobs from previous deploys
   try {
     const { Queue } = await import("bullmq");
-    for (const queueName of ["normalize", "render"]) {
+    for (const queueName of ["normalize", "render", "hls-package"]) {
       const q = new Queue(queueName, { connection: getRedisConnection() });
       const failed = await q.getFailed();
       if (failed.length > 0) {
@@ -699,6 +918,12 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
     lockDuration: RENDER_TIMEOUT_MS,
   });
 
+  const hlsPackageWorker = new Worker("hls-package", processHlsPackage, {
+    connection: redisConn,
+    concurrency: 1,
+    lockDuration: HLS_PACKAGE_TIMEOUT_MS,
+  });
+
   normalizeWorker.on("completed", (job) => {
     log("info", "normalize", job.id, "Job completed");
   });
@@ -723,6 +948,18 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
     log("error", "render", undefined, `Worker error: ${err.message}`);
   });
 
+  hlsPackageWorker.on("completed", (job) => {
+    log("info", "hls-package", job.id, "Job completed");
+  });
+
+  hlsPackageWorker.on("failed", (job, err) => {
+    log("error", "hls-package", job?.id, `Job failed: ${err.message}`);
+  });
+
+  hlsPackageWorker.on("error", (err) => {
+    log("error", "hls-package", undefined, `Worker error: ${err.message}`);
+  });
+
   console.log("[worker] Workers started successfully");
 
   // Graceful shutdown
@@ -730,6 +967,7 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
     console.log("Shutting down workers...");
     await normalizeWorker.close();
     await renderWorker.close();
+    await hlsPackageWorker.close();
     process.exit(0);
   };
 

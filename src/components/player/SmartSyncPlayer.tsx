@@ -29,6 +29,10 @@ interface SmartSyncPlayerProps {
   posterUrl?: string;
   variantId: string;
   projectSlug: string;
+  /** Whether the hook clip has been fully preloaded as a blob */
+  hookPreloaded?: boolean;
+  /** HLS manifest URL for adaptive streaming (full video only) */
+  hlsManifestUrl?: string;
 }
 
 export function SmartSyncPlayer({
@@ -38,8 +42,12 @@ export function SmartSyncPlayer({
   posterUrl,
   variantId,
   projectSlug,
+  hookPreloaded,
+  hlsManifestUrl,
 }: SmartSyncPlayerProps) {
   const [hasInteracted, setHasInteracted] = useState(false);
+  // Keep poster overlay visible until the hook video has decoded its first frame
+  const [firstFrameReady, setFirstFrameReady] = useState(false);
 
   useEffect(() => {
     console.log(
@@ -54,6 +62,8 @@ export function SmartSyncPlayer({
       hookClipUrl,
       fullVideoUrl,
       hookEndTimeMs,
+      hookPreloaded,
+      hlsManifestUrl,
       onPlay: () => {
         trackEvent("play", variantId, projectSlug);
       },
@@ -67,12 +77,35 @@ export function SmartSyncPlayer({
       },
     });
 
+  // Detect when the hook video has decoded its first frame — only then hide poster
+  useEffect(() => {
+    const hook = hookRef.current;
+    if (!hook) return;
+
+    const onPlaying = () => {
+      // 'playing' fires after the first frame is rendered — safe to remove poster
+      setFirstFrameReady(true);
+    };
+
+    hook.addEventListener("playing", onPlaying);
+    return () => hook.removeEventListener("playing", onPlaying);
+  }, [hookRef]);
+
   function handleClick() {
     if (!hasInteracted) {
       setHasInteracted(true);
     }
     togglePlay();
   }
+
+  // Show the poster overlay when:
+  // - Phase is idle (haven't started anything)
+  // - OR user hasn't interacted yet and we're still loading
+  // - OR user clicked play but hook hasn't rendered its first frame yet
+  const showPoster =
+    phase === "idle" ||
+    (!hasInteracted && phase === "loading") ||
+    (hasInteracted && !firstFrameReady && phase !== "playing_hook" && phase !== "playing_full");
 
   return (
     <div
@@ -93,6 +126,7 @@ export function SmartSyncPlayer({
       <video
         ref={fullRef}
         playsInline
+        poster={posterUrl}
         style={{
           position: "absolute",
           top: 0,
@@ -107,6 +141,7 @@ export function SmartSyncPlayer({
       <video
         ref={hookRef}
         playsInline
+        poster={posterUrl}
         style={{
           position: "absolute",
           top: 0,
@@ -117,8 +152,8 @@ export function SmartSyncPlayer({
         }}
       />
 
-      {/* Play button overlay — always on top */}
-      {(phase === "idle" || (!hasInteracted && phase === "loading")) && (
+      {/* Play button overlay — stays on top until first frame is decoded */}
+      {showPoster && (
         <div
           style={{
             position: "absolute",
@@ -132,23 +167,41 @@ export function SmartSyncPlayer({
               : "rgba(0,0,0,0.4)",
           }}
         >
-          <div
-            style={{
-              width: 64,
-              height: 64,
-              borderRadius: "50%",
-              background: "rgba(255,255,255,0.9)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="#000">
-              <polygon points="6,3 20,12 6,21" />
-            </svg>
-          </div>
+          {/* Show play button only before interaction, show spinner after click */}
+          {!hasInteracted ? (
+            <div
+              style={{
+                width: 64,
+                height: 64,
+                borderRadius: "50%",
+                background: "rgba(255,255,255,0.9)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="#000">
+                <polygon points="6,3 20,12 6,21" />
+              </svg>
+            </div>
+          ) : (
+            /* Loading spinner while waiting for first frame after click */
+            <div
+              style={{
+                width: 48,
+                height: 48,
+                border: "3px solid rgba(255,255,255,0.3)",
+                borderTopColor: "rgba(255,255,255,0.9)",
+                borderRadius: "50%",
+                animation: "wai-spin 0.8s linear infinite",
+              }}
+            />
+          )}
         </div>
       )}
+
+      {/* Spinner animation */}
+      <style>{`@keyframes wai-spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
