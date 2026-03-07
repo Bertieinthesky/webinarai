@@ -187,6 +187,14 @@ export function useSmartSync({
       // Reset playback rate
       full.playbackRate = 1.0;
 
+      // Force-sync: snap full video to hook's exact position.
+      // Drift correction keeps them close (~33ms), but any remaining
+      // gap causes the "rewind glitch" — viewer sees a moment they
+      // already watched. This seek is masked by the 80ms crossfade.
+      if (Math.abs(hook.currentTime - full.currentTime) > 0.016) {
+        full.currentTime = hook.currentTime;
+      }
+
       // === CRITICAL: All swap mutations must be synchronous ===
       // Direct DOM manipulation ensures visual + audio swap happen
       // in the SAME JS execution frame, before the browser paints.
