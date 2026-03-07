@@ -90,7 +90,8 @@ import {
 } from "../lib/storage/keys";
 import { getRedisConnection } from "../lib/queue/connection";
 import { splitVideoClip } from "../lib/video/split";
-import type { NormalizeJobData, RenderJobData, HlsPackageJobData, SplitJobData } from "../lib/queue/types";
+import { detectSceneChanges, detectSilence, deduplicatePoints } from "../lib/video/scene-detect";
+import type { NormalizeJobData, RenderJobData, HlsPackageJobData, SplitJobData, AnalyzeJobData } from "../lib/queue/types";
 import type { Database } from "../lib/supabase/types";
 
 type Project = Database["public"]["Tables"]["projects"]["Row"];
@@ -151,6 +152,7 @@ const NORMALIZE_TIMEOUT_MS = 45 * 60 * 1000;
 const RENDER_TIMEOUT_MS = 10 * 60 * 1000;
 const HLS_PACKAGE_TIMEOUT_MS = 30 * 60 * 1000;
 const SPLIT_TIMEOUT_MS = 20 * 60 * 1000;
+const ANALYZE_TIMEOUT_MS = 10 * 60 * 1000;
 
 // ──────────────────────────────────────────
 // Helper: Structured logging with timing
@@ -558,10 +560,31 @@ async function processRender(job: Job<RenderJobData>) {
     await job.updateProgress(30);
     await updateJobProgress(variantId, "render", 30);
 
-    // Stitch segments
+    // Get project specs for re-encoding during stitch and hook extraction
+    const { data: rawProject } = await supabase
+      .from("projects")
+      .select("*")
+      .eq("id", projectId)
+      .single();
+
+    const renderProject = rawProject as Project | null;
+    const renderSpec = renderProject
+      ? {
+          ...DEFAULT_SPEC,
+          width: renderProject.target_width,
+          height: renderProject.target_height,
+          fps: renderProject.target_fps,
+          videoCodec: renderProject.target_video_codec,
+          audioCodec: renderProject.target_audio_codec,
+          audioRate: renderProject.target_audio_rate,
+          pixelFormat: renderProject.target_pixel_format,
+        }
+      : DEFAULT_SPEC;
+
+    // Stitch segments (re-encodes via concat filter for seamless transitions)
     const variantPath = join(workDir, "variant.mp4");
-    log("info", "render", job.id, `Stitching variant ${variantId}`);
-    await stitchSegments([hookPath, bodyPath, ctaPath], variantPath, workDir);
+    log("info", "render", job.id, `Stitching variant ${variantId} (re-encode via concat filter)`);
+    await stitchSegments([hookPath, bodyPath, ctaPath], variantPath, workDir, renderSpec);
     await job.updateProgress(50);
     await updateJobProgress(variantId, "render", 50);
 
@@ -569,7 +592,7 @@ async function processRender(job: Job<RenderJobData>) {
     const hookClipPath = join(workDir, "hook-clip.mp4");
     const posterPath = join(workDir, "poster.jpg");
     log("info", "render", job.id, `Extracting hook clip for variant ${variantId}`);
-    await extractHookClip(variantPath, hookClipPath, hookDurationMs);
+    await extractHookClip(variantPath, hookClipPath, hookDurationMs, renderSpec);
     log("info", "render", job.id, `Extracting poster frame for variant ${variantId}`);
     await extractPosterFrame(variantPath, posterPath);
 
@@ -623,7 +646,7 @@ async function processRender(job: Job<RenderJobData>) {
         hook_clip_storage_key: hookClipKey,
         hook_clip_size_bytes: hookClipSize,
         hook_clip_duration_ms: hookClipMeta.duration_ms,
-        hook_end_time_ms: hookDurationMs,
+        hook_end_time_ms: hookClipMeta.duration_ms,
         micro_segment_storage_key: microSegmentKey,
       })
       .eq("id", variantId);
@@ -983,6 +1006,65 @@ async function processSplit(job: Job<SplitJobData>) {
 }
 
 // ──────────────────────────────────────────
+// Analyze — Scene detection + silence detection
+// ──────────────────────────────────────────
+
+async function processAnalyze(job: Job<AnalyzeJobData>) {
+  const { splitId, sourceStorageKey, threshold = 0.3 } = job.data;
+  const workDir = join(tmpdir(), `wai-analyze-${job.id}`);
+  const startTime = Date.now();
+
+  try {
+    await mkdir(workDir, { recursive: true });
+    log("info", "analyze", job.id, `Starting analysis`, { splitId, threshold });
+
+    // Download source video
+    const inputPath = join(workDir, "source.mp4");
+    const sourceObj = await r2.send(
+      new GetObjectCommand({ Bucket: BUCKET, Key: sourceStorageKey })
+    );
+    const sourceBytes = await sourceObj.Body!.transformToByteArray();
+    await writeFile(inputPath, sourceBytes);
+    log("info", "analyze", job.id, `Downloaded source: ${(sourceBytes.length / 1024 / 1024).toFixed(1)}MB`);
+    await job.updateProgress(15);
+
+    // Run scene detection
+    const sceneChanges = await detectSceneChanges(inputPath, threshold);
+    log("info", "analyze", job.id, `Scene detection: ${sceneChanges.length} changes`);
+    await job.updateProgress(55);
+
+    // Run silence detection
+    const silenceGaps = await detectSilence(inputPath);
+    log("info", "analyze", job.id, `Silence detection: ${silenceGaps.length} gaps`);
+    await job.updateProgress(80);
+
+    // Merge and deduplicate (within 1s of each other)
+    const allPoints = [...sceneChanges, ...silenceGaps];
+    const deduplicated = deduplicatePoints(allPoints, 1000);
+
+    // Store results on the split record
+    await supabase
+      .from("splits")
+      .update({ scene_points: deduplicated as unknown as undefined })
+      .eq("id", splitId);
+
+    await job.updateProgress(100);
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    log("info", "analyze", job.id, `Analysis complete in ${elapsed}s`, {
+      sceneChanges: sceneChanges.length,
+      silenceGaps: silenceGaps.length,
+      totalPoints: deduplicated.length,
+    });
+  } catch (error) {
+    log("error", "analyze", job.id, `Analysis failed: ${error instanceof Error ? error.message : "Unknown"}`);
+    throw error;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+// ──────────────────────────────────────────
 // Start workers
 // ──────────────────────────────────────────
 
@@ -996,7 +1078,7 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
   // Step 1: Clean stale failed jobs from previous deploys
   try {
     const { Queue } = await import("bullmq");
-    for (const queueName of ["normalize", "render", "hls-package", "split"]) {
+    for (const queueName of ["normalize", "render", "hls-package", "split", "analyze"]) {
       const q = new Queue(queueName, { connection: getRedisConnection() });
       const failed = await q.getFailed();
       if (failed.length > 0) {
@@ -1034,6 +1116,12 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
     connection: redisConn,
     concurrency: 1,
     lockDuration: SPLIT_TIMEOUT_MS,
+  });
+
+  const analyzeWorker = new Worker("analyze", processAnalyze, {
+    connection: redisConn,
+    concurrency: 1,
+    lockDuration: ANALYZE_TIMEOUT_MS,
   });
 
   normalizeWorker.on("completed", (job) => {
@@ -1084,6 +1172,18 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
     log("error", "split", undefined, `Worker error: ${err.message}`);
   });
 
+  analyzeWorker.on("completed", (job) => {
+    log("info", "analyze", job.id, "Job completed");
+  });
+
+  analyzeWorker.on("failed", (job, err) => {
+    log("error", "analyze", job?.id, `Job failed: ${err.message}`);
+  });
+
+  analyzeWorker.on("error", (err) => {
+    log("error", "analyze", undefined, `Worker error: ${err.message}`);
+  });
+
   console.log("[worker] Workers started successfully");
 
   // Graceful shutdown
@@ -1093,6 +1193,7 @@ console.log(`[worker] Redis target: ${redisConn.host}:${redisConn.port} (tls: ${
     await renderWorker.close();
     await hlsPackageWorker.close();
     await splitWorker.close();
+    await analyzeWorker.close();
     process.exit(0);
   };
 
