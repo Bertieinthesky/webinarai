@@ -44,6 +44,7 @@ export function PipelineStepperLayout(props: ProjectLayoutProps) {
     bodies,
     ctas,
     renderedVariants,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     activeVariants,
     failedSegments,
     failedVariants,
