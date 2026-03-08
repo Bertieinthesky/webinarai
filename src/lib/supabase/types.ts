@@ -186,6 +186,7 @@ export interface Database {
           hls_master_manifest_key: string | null;
           hls_status: string | null;
           hls_error_message: string | null;
+          dual_clutch_manifest_key: string | null;
           status: VariantStatus;
           error_message: string | null;
           variant_code: string;
@@ -213,6 +214,7 @@ export interface Database {
           hls_master_manifest_key?: string | null;
           hls_status?: string | null;
           hls_error_message?: string | null;
+          dual_clutch_manifest_key?: string | null;
           status?: VariantStatus;
           error_message?: string | null;
           variant_code: string;
@@ -240,6 +242,7 @@ export interface Database {
           hls_master_manifest_key?: string | null;
           hls_status?: string | null;
           hls_error_message?: string | null;
+          dual_clutch_manifest_key?: string | null;
           status?: VariantStatus;
           error_message?: string | null;
           variant_code?: string;
@@ -514,6 +517,36 @@ export interface Database {
           description?: string | null;
           created_at?: string;
           updated_at?: string;
+        };
+        Relationships: [];
+      };
+      project_activity: {
+        Row: {
+          id: string;
+          project_id: string;
+          event_type: string;
+          title: string;
+          detail: string | null;
+          metadata: Record<string, unknown>;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          project_id: string;
+          event_type: string;
+          title: string;
+          detail?: string | null;
+          metadata?: Record<string, unknown>;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          project_id?: string;
+          event_type?: string;
+          title?: string;
+          detail?: string | null;
+          metadata?: Record<string, unknown>;
+          created_at?: string;
         };
         Relationships: [];
       };

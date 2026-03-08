@@ -30,6 +30,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { generateCombinations } from "@/lib/variant/combinations";
 import { enqueueNormalize, enqueueRender } from "@/lib/queue/jobs";
 import { handleApiError, errorResponse } from "@/lib/utils/errors";
+import { logActivity } from "@/lib/activity/log";
 import type { Database } from "@/lib/supabase/types";
 
 type Project = Database["public"]["Tables"]["projects"]["Row"];
@@ -56,8 +57,9 @@ export async function POST(
     }
 
     const typedProject = project as Project;
-    if (typedProject.status !== "draft") {
-      return errorResponse("Project is already processing or complete");
+    const wasReady = typedProject.status === "ready";
+    if (typedProject.status !== "draft" && typedProject.status !== "ready") {
+      return errorResponse("Project is already processing");
     }
 
     // Reset any previously-failed segments so they can be re-processed
@@ -204,6 +206,21 @@ export async function POST(
         }
       }
     }
+
+    await logActivity({
+      supabase: admin,
+      projectId,
+      eventType: wasReady ? "processing_restarted" : "processing_started",
+      title: wasReady ? "Reprocessing started" : "Processing started",
+      detail: `${combinations.length} variants from ${hooks.length}H \u00d7 ${bodies.length}B \u00d7 ${ctas.length}C`,
+      metadata: {
+        variantCount: combinations.length,
+        segmentsToNormalize: toNormalize.length,
+        hookCount: hooks.length,
+        bodyCount: bodies.length,
+        ctaCount: ctas.length,
+      },
+    });
 
     return NextResponse.json({
       message: "Processing started",

@@ -20,6 +20,8 @@ import { AnalyticsDashboard } from "@/components/analytics/AnalyticsDashboard";
 import { VariantCard } from "@/components/project/VariantCard";
 import { VariantDetailPanel } from "@/components/project/VariantDetailPanel";
 import { ProcessingTips } from "@/components/project/ProcessingTips";
+import { SegmentActionsBar } from "@/components/project/SegmentActionsBar";
+import { ActivityLog } from "@/components/project/ActivityLog";
 import {
   StatusBadge,
   SplitTestIndicator,
@@ -249,6 +251,12 @@ export function ScrollspyCardsLayout(props: ProjectLayoutProps) {
             <SegmentTypeSection type="hook" segments={hooks} bestSegmentId={bestSegmentIds.hook} />
             <SegmentTypeSection type="body" segments={bodies} bestSegmentId={bestSegmentIds.body} />
             <SegmentTypeSection type="cta" segments={ctas} bestSegmentId={bestSegmentIds.cta} />
+            <SegmentActionsBar
+              projectId={projectId}
+              canReprocess={hooks.length > 0 && bodies.length > 0 && ctas.length > 0 && (project.status === "draft" || project.status === "ready")}
+              isProcessing={project.status === "processing"}
+              onReprocess={onRefresh}
+            />
           </div>
         </div>
 
@@ -319,6 +327,8 @@ export function ScrollspyCardsLayout(props: ProjectLayoutProps) {
           </div>
         )}
       </div>
+
+      <ActivityLog projectId={projectId} />
 
       {/* ── Variant Detail Panel ── */}
       {selectedVariantId && (() => {

@@ -93,10 +93,10 @@ export default function PreviewPage() {
           <div className="lg:col-span-2 space-y-3">
             <Card className="border-border bg-card overflow-hidden">
               <CardContent className="p-0">
-                {selected && playerMode === "dualclutch" && (selected as Record<string, unknown>).dual_clutch_manifest_key && selected.video_storage_key ? (
+                {selected && playerMode === "dualclutch" && selected.dual_clutch_manifest_key && selected.video_storage_key ? (
                   <div key={`${selected.id}-dualclutch`}>
                     <DualClutchPlayer
-                      manifestUrl={storageUrl((selected as Record<string, unknown>).dual_clutch_manifest_key as string)}
+                      manifestUrl={storageUrl(selected.dual_clutch_manifest_key)}
                       mp4FallbackUrl={storageUrl(selected.video_storage_key)}
                       posterUrl={storageUrl(variantPosterKey(projectId, selected.id))}
                       variantId={selected.id}

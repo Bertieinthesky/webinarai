@@ -25,6 +25,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getPresignedUploadUrl } from "@/lib/storage/r2";
 import { originalSegmentKey } from "@/lib/storage/keys";
 import { handleApiError, errorResponse } from "@/lib/utils/errors";
+import { logActivity } from "@/lib/activity/log";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 
@@ -113,6 +114,15 @@ export async function POST(
 
     // Generate presigned upload URL
     const uploadUrl = await getPresignedUploadUrl(storageKey, parsed.contentType);
+
+    await logActivity({
+      supabase,
+      projectId,
+      eventType: "segment_uploaded",
+      title: `New ${parsed.type} added`,
+      detail: parsed.label,
+      metadata: { segmentId, type: parsed.type, label: parsed.label },
+    });
 
     return NextResponse.json({ segment, uploadUrl }, { status: 201 });
   } catch (error) {

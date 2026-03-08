@@ -94,6 +94,7 @@ import { getRedisConnection } from "../lib/queue/connection";
 import { splitVideoClip } from "../lib/video/split";
 import { detectSceneChanges, detectSilence, deduplicatePoints } from "../lib/video/scene-detect";
 import type { NormalizeJobData, RenderJobData, HlsPackageJobData, SplitJobData, AnalyzeJobData } from "../lib/queue/types";
+import { logActivity } from "../lib/activity/log";
 import type { Database } from "../lib/supabase/types";
 
 type Project = Database["public"]["Tables"]["projects"]["Row"];
@@ -401,6 +402,22 @@ async function processNormalize(job: Job<NormalizeJobData>) {
 
     await job.updateProgress(100);
 
+    // Activity log
+    const { data: segRecord } = await supabase
+      .from("segments")
+      .select("type, label")
+      .eq("id", segmentId)
+      .single();
+    if (segRecord) {
+      await logActivity({
+        supabase, projectId,
+        eventType: "segment_normalized",
+        title: `${segRecord.type} normalized`,
+        detail: segRecord.label,
+        metadata: { segmentId, type: segRecord.type },
+      });
+    }
+
     // Check if ALL segments for this project are normalized
     await checkAndEnqueueRenders(projectId);
 
@@ -438,6 +455,14 @@ async function processNormalize(job: Job<NormalizeJobData>) {
         })
         .eq("target_id", segmentId)
         .eq("job_type", "normalize");
+
+      await logActivity({
+        supabase, projectId,
+        eventType: "segment_failed",
+        title: "Segment processing failed",
+        detail: error instanceof Error ? error.message : "Unknown error",
+        metadata: { segmentId },
+      });
     }
 
     throw error;
@@ -659,6 +684,19 @@ async function processRender(job: Job<RenderJobData>) {
       })
       .eq("id", variantId);
 
+    // Activity log
+    const { data: varRecord } = await supabase
+      .from("variants")
+      .select("variant_code")
+      .eq("id", variantId)
+      .single();
+    await logActivity({
+      supabase, projectId,
+      eventType: "variant_rendered",
+      title: `Variant ${varRecord?.variant_code ?? variantId.slice(0, 8)} rendered`,
+      metadata: { variantId, variantCode: varRecord?.variant_code },
+    });
+
     // Best-effort: encode 720p mobile rendition
     // This is a re-encode (takes real time) so it runs AFTER the variant is
     // marked rendered. If it fails, mobile falls back to 1080p.
@@ -807,6 +845,14 @@ async function processRender(job: Job<RenderJobData>) {
         })
         .eq("target_id", variantId)
         .eq("job_type", "render");
+
+      await logActivity({
+        supabase, projectId,
+        eventType: "variant_failed",
+        title: "Variant rendering failed",
+        detail: error instanceof Error ? error.message : "Unknown error",
+        metadata: { variantId },
+      });
     }
 
     throw error;
@@ -835,6 +881,14 @@ async function checkProjectComplete(projectId: string) {
       .from("projects")
       .update({ status: "ready" })
       .eq("id", projectId);
+
+    await logActivity({
+      supabase, projectId,
+      eventType: "project_ready",
+      title: "All variants ready",
+      detail: `${variants.length} variants rendered`,
+      metadata: { variantCount: variants.length },
+    });
   }
 }
 

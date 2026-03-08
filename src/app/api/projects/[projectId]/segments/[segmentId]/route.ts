@@ -20,6 +20,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { handleApiError, errorResponse } from "@/lib/utils/errors";
+import { logActivity } from "@/lib/activity/log";
 import { z } from "zod";
 
 const updateSegmentSchema = z
@@ -72,6 +73,14 @@ export async function DELETE(
     const { projectId, segmentId } = await params;
     const supabase = createAdminClient();
 
+    // Read segment before deleting for the activity log
+    const { data: segment } = await supabase
+      .from("segments")
+      .select("type, label")
+      .eq("id", segmentId)
+      .eq("project_id", projectId)
+      .single();
+
     const { error } = await supabase
       .from("segments")
       .delete()
@@ -79,6 +88,18 @@ export async function DELETE(
       .eq("project_id", projectId);
 
     if (error) return errorResponse(error.message);
+
+    if (segment) {
+      await logActivity({
+        supabase,
+        projectId,
+        eventType: "segment_deleted",
+        title: `${segment.type} removed`,
+        detail: segment.label,
+        metadata: { segmentId, type: segment.type },
+      });
+    }
+
     return NextResponse.json({ success: true });
   } catch (error) {
     return handleApiError(error);
