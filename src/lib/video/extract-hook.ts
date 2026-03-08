@@ -84,5 +84,7 @@ export async function extractHookClip(
     hookClipOutputPath,
   ];
 
+  console.log(`[extract-hook] Re-encoding ${durationSec}s hook clip (${spec.videoCodec} crf=${spec.crf})`);
+
   await runFFmpeg(args);
 }

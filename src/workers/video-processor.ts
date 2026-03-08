@@ -583,8 +583,14 @@ async function processRender(job: Job<RenderJobData>) {
 
     // Stitch segments (re-encodes via concat filter for seamless transitions)
     const variantPath = join(workDir, "variant.mp4");
-    log("info", "render", job.id, `Stitching variant ${variantId} (re-encode via concat filter)`);
+    log("info", "render", job.id, `Stitching variant ${variantId} (re-encode via concat filter, version: ${WORKER_VERSION})`);
+    log("info", "render", job.id, `Stitch spec: ${renderSpec.videoCodec} crf=${renderSpec.crf} ${renderSpec.width}x${renderSpec.height}@${renderSpec.fps}fps`);
     await stitchSegments([hookPath, bodyPath, ctaPath], variantPath, workDir, renderSpec);
+
+    // Verify stitched output
+    const stitchedProbe = await probeVideo(variantPath);
+    log("info", "render", job.id, `Stitch output: ${stitchedProbe.duration_ms}ms, ${stitchedProbe.width}x${stitchedProbe.height}, codec=${stitchedProbe.video_codec}`);
+
     await job.updateProgress(50);
     await updateJobProgress(variantId, "render", 50);
 
@@ -1068,6 +1074,9 @@ async function processAnalyze(job: Job<AnalyzeJobData>) {
 // Start workers
 // ──────────────────────────────────────────
 
+// Version stamp — check Railway logs for this string to verify which code is running
+const WORKER_VERSION = "2026-03-07-v2-concat-filter";
+console.log(`[worker] Video processor starting — version: ${WORKER_VERSION}`);
 console.log("Starting webinar.ai video processing workers...");
 
 const redisConn = getRedisConnection();

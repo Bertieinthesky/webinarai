@@ -94,5 +94,9 @@ export async function stitchSegments(
     outputPath,
   ];
 
+  console.log(`[stitch] Concat filter re-encode: ${segmentPaths.length} segments → ${outputPath}`);
+  console.log(`[stitch] Codec: ${spec.videoCodec} crf=${spec.crf} ${spec.width}x${spec.height}@${spec.fps}fps`);
+  console.log(`[stitch] Filter: ${filterComplex}`);
+
   await runFFmpeg(args);
 }
