@@ -13,6 +13,20 @@
     ? new URL(document.currentScript.src).origin
     : 'https://webinar.ai';
 
+  // DNS preconnect — resolve DNS + TLS handshake to our origin immediately.
+  // Shaves 100-500ms off iframe load for first-time visitors.
+  var preconnect = document.createElement('link');
+  preconnect.rel = 'preconnect';
+  preconnect.href = BASE_URL;
+  preconnect.crossOrigin = 'anonymous';
+  document.head.appendChild(preconnect);
+
+  // Also add dns-prefetch as fallback for browsers that don't support preconnect
+  var dnsPrefetch = document.createElement('link');
+  dnsPrefetch.rel = 'dns-prefetch';
+  dnsPrefetch.href = BASE_URL;
+  document.head.appendChild(dnsPrefetch);
+
   var containers = document.querySelectorAll('[data-wai-project]');
   if (!containers.length) return;
 

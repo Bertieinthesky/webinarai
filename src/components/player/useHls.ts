@@ -88,6 +88,9 @@ export function useHls(): UseHlsReturn {
           // Start loading immediately
           autoStartLoad: true,
           startPosition: startPosition ?? -1,
+          // Offload TS→fMP4 transmuxing to a Web Worker — keeps the main
+          // thread free for rendering, player UI, and analytics
+          enableWorker: true,
         });
 
         hlsRef.current = hls;
