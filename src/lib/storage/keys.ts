@@ -16,6 +16,9 @@
  *   projects/{projectId}/variants/{variantId}/hls/{rendition}/playlist.m3u8
  *   projects/{projectId}/variants/{variantId}/hls/{rendition}/init.mp4
  *   projects/{projectId}/variants/{variantId}/hls/{rendition}/seg{index}.m4s
+ *   projects/{projectId}/variants/{variantId}/dual-clutch/combined.m3u8
+ *   projects/{projectId}/variants/{variantId}/dual-clutch/{segment}/init.mp4
+ *   projects/{projectId}/variants/{variantId}/dual-clutch/{segment}/seg{index}.m4s
  *
  * ARCHITECTURE:
  *   - Used by: API routes (when creating segment records), video-processor
@@ -113,6 +116,30 @@ export function variantHlsSegmentKey(
 ): string {
   const padded = String(segmentIndex).padStart(3, "0");
   return `${variantHlsPrefix(projectId, variantId)}/${rendition}/seg${padded}.m4s`;
+}
+
+// ─── Dual Clutch player keys ───
+
+export function dualClutchPrefix(
+  projectId: string,
+  variantId: string
+): string {
+  return `projects/${projectId}/variants/${variantId}/dual-clutch`;
+}
+
+export function dualClutchManifestKey(
+  projectId: string,
+  variantId: string
+): string {
+  return `${dualClutchPrefix(projectId, variantId)}/combined.m3u8`;
+}
+
+export function dualClutchSegmentDir(
+  projectId: string,
+  variantId: string,
+  segmentName: string
+): string {
+  return `${dualClutchPrefix(projectId, variantId)}/${segmentName}`;
 }
 
 // ─── Splitter keys ───

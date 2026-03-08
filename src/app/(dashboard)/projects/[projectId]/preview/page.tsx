@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/card";
 import { EmbedPlayer } from "@/components/player/EmbedPlayer";
 import { SmartSyncPlayer } from "@/components/player/SmartSyncPlayer";
+import { DualClutchPlayer } from "@/components/player/DualClutchPlayer";
 import { storageUrl } from "@/lib/storage/urls";
 import { variantPosterKey } from "@/lib/storage/keys";
 import { formatDuration, formatFileSize } from "@/lib/utils/format";
@@ -34,7 +35,7 @@ export default function PreviewPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [variants, setVariants] = useState<Variant[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
-  const [playerMode, setPlayerMode] = useState<"smartsync" | "smart" | "simple">("smartsync");
+  const [playerMode, setPlayerMode] = useState<"dualclutch" | "smartsync" | "smart" | "simple">("dualclutch");
   const supabase = useMemo(() => createClient(), []);
 
   useEffect(() => {
@@ -92,7 +93,31 @@ export default function PreviewPage() {
           <div className="lg:col-span-2 space-y-3">
             <Card className="border-border bg-card overflow-hidden">
               <CardContent className="p-0">
-                {selected && playerMode === "smartsync" && selected.hook_clip_storage_key && selected.video_storage_key ? (
+                {selected && playerMode === "dualclutch" && (selected as Record<string, unknown>).dual_clutch_manifest_key && selected.video_storage_key ? (
+                  <div key={`${selected.id}-dualclutch`}>
+                    <DualClutchPlayer
+                      manifestUrl={storageUrl((selected as Record<string, unknown>).dual_clutch_manifest_key as string)}
+                      mp4FallbackUrl={storageUrl(selected.video_storage_key)}
+                      posterUrl={storageUrl(variantPosterKey(projectId, selected.id))}
+                      variantId={selected.id}
+                      projectSlug="preview"
+                    />
+                  </div>
+                ) : selected && playerMode === "dualclutch" && selected.video_storage_key ? (
+                  // Dual Clutch not yet packaged — fall back to simple player with message
+                  <div key={`${selected.id}-dualclutch-fallback`}>
+                    <video
+                      controls
+                      preload="auto"
+                      className="aspect-video w-full bg-black"
+                      poster={storageUrl(variantPosterKey(projectId, selected.id))}
+                      src={storageUrl(selected.video_storage_key)}
+                    />
+                    <div className="px-5 py-2 text-xs text-amber-500/80">
+                      Dual Clutch manifest not yet generated. Re-process this project to enable.
+                    </div>
+                  </div>
+                ) : selected && playerMode === "smartsync" && selected.hook_clip_storage_key && selected.video_storage_key ? (
                   <div key={`${selected.id}-smartsync`}>
                     <SmartSyncPlayer
                       hookClipUrl={storageUrl(selected.hook_clip_storage_key)}
@@ -148,6 +173,16 @@ export default function PreviewPage() {
             <div className="flex items-center gap-2">
               <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
                 <button
+                  onClick={() => setPlayerMode("dualclutch")}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                    playerMode === "dualclutch"
+                      ? "bg-primary/15 text-primary shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Dual Clutch
+                </button>
+                <button
                   onClick={() => setPlayerMode("smartsync")}
                   className={`rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
                     playerMode === "smartsync"
@@ -179,11 +214,13 @@ export default function PreviewPage() {
                 </button>
               </div>
               <span className="text-xs text-muted-foreground ml-1">
-                {playerMode === "smartsync"
-                  ? "Parallel sync — zero-glitch swap (recommended)"
-                  : playerMode === "smart"
-                    ? "Seek-based swap with hook preloading"
-                    : "Standard controls for scrubbing/debugging"}
+                {playerMode === "dualclutch"
+                  ? "Single-video HLS — seamless segment transitions (recommended)"
+                  : playerMode === "smartsync"
+                    ? "Parallel sync — zero-glitch swap"
+                    : playerMode === "smart"
+                      ? "Seek-based swap with hook preloading"
+                      : "Standard controls for scrubbing/debugging"}
               </span>
             </div>
           </div>

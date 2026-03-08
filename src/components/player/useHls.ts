@@ -91,6 +91,13 @@ export function useHls(): UseHlsReturn {
           // Offload TS→fMP4 transmuxing to a Web Worker — keeps the main
           // thread free for rendering, player UI, and analytics
           enableWorker: true,
+          // Buffer limits — prevent memory bloat on constrained devices.
+          // 30s forward buffer is enough for seamless playback while keeping
+          // memory usage reasonable (~50-80MB vs unbounded growth).
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+          // Only keep 10s of already-played video in memory
+          backBufferLength: 10,
         });
 
         hlsRef.current = hls;

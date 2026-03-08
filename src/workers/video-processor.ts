@@ -68,7 +68,7 @@ process.on("unhandledRejection", (reason) => {
 import { Worker, Job } from "bullmq";
 import { createClient } from "@supabase/supabase-js";
 import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
-import { mkdir, writeFile, readFile, rm } from "fs/promises";
+import { mkdir, writeFile, readFile, rm, readdir, stat } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { normalizeVideo } from "../lib/video/normalize";
@@ -82,11 +82,13 @@ import { findOptimalCrf } from "../lib/video/vmaf";
 import { extractMicroSegment } from "../lib/video/extract-micro-segment";
 import { encode720p } from "../lib/video/encode-720p";
 import { packageRendition, generateMasterPlaylist, HLS_RENDITIONS } from "../lib/video/hls-package";
+import { packageSegmentHls, generateCombinedManifest } from "../lib/video/dual-clutch-package";
 import {
   normalizedSegmentKey, variantVideoKey, variantHookClipKey, variantPosterKey,
   variantMicroSegmentKey, variant720pVideoKey,
   variantHlsMasterKey, variantHlsRenditionPlaylistKey,
   variantHlsInitSegmentKey, variantHlsSegmentKey,
+  dualClutchManifestKey, dualClutchSegmentDir,
 } from "../lib/storage/keys";
 import { getRedisConnection } from "../lib/queue/connection";
 import { splitVideoClip } from "../lib/video/split";
@@ -696,6 +698,65 @@ async function processRender(job: Job<RenderJobData>) {
       log("info", "render", job.id, `Enqueued HLS packaging for variant ${variantId}`);
     } catch (hlsErr) {
       log("warn", "render", job.id, `HLS enqueue skipped (non-blocking): ${hlsErr instanceof Error ? hlsErr.message : String(hlsErr)}`);
+    }
+
+    // Best-effort: Dual Clutch per-segment HLS packaging (stream-copy, instant)
+    try {
+      const dcDir = join(workDir, "dual-clutch");
+      await mkdir(dcDir, { recursive: true });
+
+      log("info", "render", job.id, `Packaging Dual Clutch segments for variant ${variantId}`);
+      await packageSegmentHls(hookPath, dcDir, "hook");
+      await packageSegmentHls(bodyPath, dcDir, "body");
+      await packageSegmentHls(ctaPath, dcDir, "cta");
+
+      const { manifestPath, segmentDurationsMs } = await generateCombinedManifest(dcDir, ["hook", "body", "cta"]);
+      log("info", "render", job.id, `Dual Clutch manifest: 3 segments, durations: ${segmentDurationsMs.map(d => `${(d / 1000).toFixed(1)}s`).join(" + ")}`);
+
+      // Upload all Dual Clutch files to R2
+      // Upload combined manifest
+      const dcManifestKey = dualClutchManifestKey(projectId, variantId);
+      await uploadToR2(manifestPath, dcManifestKey, "application/vnd.apple.mpegurl");
+
+      // Upload each segment's HLS files (init.mp4, seg*.m4s, playlist.m3u8)
+      for (const segName of ["hook", "body", "cta"]) {
+        const segDir = join(dcDir, segName);
+        const files = await readdir(segDir);
+        const uploadBatch: Promise<number>[] = [];
+
+        for (const file of files) {
+          const localPath = join(segDir, file);
+          const fileStat = await stat(localPath);
+          if (!fileStat.isFile()) continue;
+
+          const r2Key = `${dualClutchSegmentDir(projectId, variantId, segName)}/${file}`;
+          const contentType = file.endsWith(".m3u8")
+            ? "application/vnd.apple.mpegurl"
+            : "video/mp4";
+
+          uploadBatch.push(uploadToR2(localPath, r2Key, contentType));
+
+          if (uploadBatch.length >= 20) {
+            await Promise.all(uploadBatch);
+            uploadBatch.length = 0;
+          }
+        }
+        if (uploadBatch.length > 0) {
+          await Promise.all(uploadBatch);
+        }
+      }
+
+      // Update variant with Dual Clutch manifest key
+      await supabase
+        .from("variants")
+        .update({
+          dual_clutch_manifest_key: dcManifestKey,
+        })
+        .eq("id", variantId);
+
+      log("info", "render", job.id, `Dual Clutch packaging complete for variant ${variantId}`);
+    } catch (dcErr) {
+      log("warn", "render", job.id, `Dual Clutch packaging skipped (non-blocking): ${dcErr instanceof Error ? dcErr.message : String(dcErr)}`);
     }
 
     // Update processing job

@@ -34,8 +34,9 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { usePlayerSwap } from "./usePlayerSwap";
+import { PlayerControls } from "./PlayerControls";
 
 interface EmbedPlayerProps {
   hookClipUrl: string;
@@ -59,6 +60,9 @@ export function EmbedPlayer({
     hookRef,
     fullRef,
     phase,
+    currentTime,
+    duration,
+    isPlaying,
     togglePlay,
     showHook,
     showFull,
@@ -80,6 +84,13 @@ export function EmbedPlayer({
       trackEvent("complete", variantId);
     },
   });
+
+  const handleSeek = useCallback((time: number) => {
+    const full = fullRef.current;
+    if (full) {
+      full.currentTime = time;
+    }
+  }, [fullRef]);
 
   function handleClick() {
     if (!hasInteracted) {
@@ -168,7 +179,16 @@ export function EmbedPlayer({
         </div>
       )}
 
-      {/* No spinner during swap — the hook's last frame stays visible until full video is ready */}
+      {/* Player controls (progress bar + scrub) */}
+      {hasInteracted && (phase === "playing_hook" || phase === "playing_full" || phase === "ended") && (
+        <PlayerControls
+          currentTime={currentTime}
+          duration={duration}
+          isPlaying={isPlaying}
+          onSeek={handleSeek}
+          onTogglePlay={togglePlay}
+        />
+      )}
     </div>
   );
 }

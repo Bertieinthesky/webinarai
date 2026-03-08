@@ -16,8 +16,9 @@
 
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useSmartSync } from "./useSmartSync";
+import { PlayerControls } from "./PlayerControls";
 
 // Version tag — check browser console or inspect data-wai-version to verify deploy
 const WAI_VERSION = "smartsync-2.1";
@@ -57,7 +58,7 @@ export function SmartSyncPlayer({
     );
   }, []);
 
-  const { hookRef, fullRef, phase, togglePlay } =
+  const { hookRef, fullRef, phase, currentTime, duration, isPlaying, togglePlay } =
     useSmartSync({
       hookClipUrl,
       fullVideoUrl,
@@ -90,6 +91,13 @@ export function SmartSyncPlayer({
     hook.addEventListener("playing", onPlaying);
     return () => hook.removeEventListener("playing", onPlaying);
   }, [hookRef]);
+
+  const handleSeek = useCallback((time: number) => {
+    const full = fullRef.current;
+    if (full) {
+      full.currentTime = time;
+    }
+  }, [fullRef]);
 
   function handleClick() {
     if (!hasInteracted) {
@@ -198,6 +206,17 @@ export function SmartSyncPlayer({
             />
           )}
         </div>
+      )}
+
+      {/* Player controls (progress bar + scrub) */}
+      {hasInteracted && firstFrameReady && (
+        <PlayerControls
+          currentTime={currentTime}
+          duration={duration}
+          isPlaying={isPlaying}
+          onSeek={handleSeek}
+          onTogglePlay={togglePlay}
+        />
       )}
 
       {/* Spinner animation */}
