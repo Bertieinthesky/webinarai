@@ -27,6 +27,7 @@ import { useAnalytics } from "@/hooks/use-analytics";
 import { AnalyticsDashboard } from "@/components/analytics/AnalyticsDashboard";
 import { VariantCard } from "@/components/project/VariantCard";
 import { VariantDetailPanel } from "@/components/project/VariantDetailPanel";
+import { LayoutSwitcher } from "@/components/project/layouts/LayoutSwitcher";
 import type { Database } from "@/lib/supabase/types";
 
 type Project = Database["public"]["Tables"]["projects"]["Row"];
@@ -164,268 +165,26 @@ export default function ProjectDetailPage() {
   const bestSegmentIds = getBestSegmentIds(analytics, variants, segments);
 
   return (
-    <div className="space-y-6">
-      {/* ── Header ── */}
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl font-semibold tracking-tight text-foreground">
-              {project.name}
-            </h1>
-            <StatusBadge status={project.status} />
-            <button
-              onClick={load}
-              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              title="Refresh"
-            >
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={1.75}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M20.984 4.356v4.992"
-                />
-              </svg>
-            </button>
-          </div>
-          <div className="mt-1 flex items-center gap-3">
-            <p className="text-sm text-muted-foreground">
-              Created{" "}
-              {new Date(project.created_at).toLocaleDateString("en-US", {
-                month: "short",
-                day: "numeric",
-                year: "numeric",
-              })}
-            </p>
-            {/* Split test indicator */}
-            {renderedVariants.length > 0 && (
-              <SplitTestIndicator
-                isSplitTest={isSplitTest}
-                activeCount={activeVariants.length}
-              />
-            )}
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Link href={`/projects/${projectId}/upload`}>
-            <Button variant="outline">
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={1.75}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"
-                />
-              </svg>
-              Upload Segments
-            </Button>
-          </Link>
-          {renderedVariants.length > 0 && (
-            <Link href={`/projects/${projectId}/embed`}>
-              <Button>
-                <svg
-                  className="h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={1.75}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5"
-                  />
-                </svg>
-                Get Embed Code
-              </Button>
-            </Link>
-          )}
-        </div>
-      </div>
-
-      {/* ── Analytics Summary ── */}
-      {analytics?.summary && (
-        <AnalyticsSummary summary={analytics.summary} />
-      )}
-
-      {/* ── Top Performer ── */}
-      {analytics?.summary?.topPerformer && (
-        <TopPerformerCard
-          topPerformer={analytics.summary.topPerformer}
-          variantCount={renderedVariants.length}
-        />
-      )}
-
-      {/* ── Failure Banner ── */}
-      {hasFailures && (
-        <Card className="border-red-500/20 bg-red-500/5">
-          <CardContent className="flex items-center justify-between p-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-red-500/10">
-                <svg
-                  className="h-5 w-5 text-red-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={1.75}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
-                  />
-                </svg>
-              </div>
-              <div>
-                <p className="text-sm font-medium text-red-400">
-                  {failedSegments.length > 0 &&
-                    `${failedSegments.length} segment${failedSegments.length > 1 ? "s" : ""} failed`}
-                  {failedSegments.length > 0 &&
-                    failedVariants.length > 0 &&
-                    " · "}
-                  {failedVariants.length > 0 &&
-                    `${failedVariants.length} variant${failedVariants.length > 1 ? "s" : ""} failed`}
-                </p>
-                <p className="mt-0.5 text-xs text-red-400/70">
-                  {failedSegments[0]?.error_message ||
-                    failedVariants[0]?.error_message ||
-                    "Reset to draft and try again"}
-                </p>
-              </div>
-            </div>
-            <RetryButton projectId={projectId} onRetry={load} />
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── Processing Progress ── */}
-      {project.status === "processing" && (
-        <ProcessingProgress projectId={projectId} onComplete={load} />
-      )}
-
-      {/* ── Segment Sections (expandable) ── */}
-      <div className="space-y-3">
-        <SegmentTypeSection
-          type="hook"
-          segments={hooks}
-          bestSegmentId={bestSegmentIds.hook}
-        />
-        <SegmentTypeSection
-          type="body"
-          segments={bodies}
-          bestSegmentId={bestSegmentIds.body}
-        />
-        <SegmentTypeSection
-          type="cta"
-          segments={ctas}
-          bestSegmentId={bestSegmentIds.cta}
-        />
-      </div>
-
-      {/* ── Variants ── */}
-      {project.status !== "processing" && variants.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-medium text-white/80">Variants</h3>
-              <p className="text-xs text-white/30">
-                {renderedVariants.length} of {variants.length} rendered
-              </p>
-            </div>
-            {renderedVariants.length > 0 && (
-              <Link href={`/projects/${projectId}/preview`}>
-                <Button variant="outline" size="sm">
-                  <svg
-                    className="h-3.5 w-3.5"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={1.75}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z"
-                    />
-                  </svg>
-                  Preview
-                </Button>
-              </Link>
-            )}
-          </div>
-
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {variants.map((v) => {
-              const va = analytics?.variants?.find(
-                (a) => a.variant_id === v.id
-              );
-              return (
-                <VariantCard
-                  key={v.id}
-                  variant={v}
-                  projectId={projectId}
-                  analytics={
-                    va
-                      ? {
-                          total_views: va.total_views,
-                          completion_rate: va.completion_rate,
-                          complete_count: va.complete_count,
-                        }
-                      : undefined
-                  }
-                  isTopPerformer={
-                    analytics?.summary?.topPerformer?.variant_id === v.id &&
-                    renderedVariants.length > 1
-                  }
-                  onUpdate={load}
-                  onExpand={() => setSelectedVariantId(v.id)}
-                />
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* ── Analytics Dashboard ── */}
-      {renderedVariants.length > 0 && (
-        <AnalyticsDashboard
-          projectId={projectId}
-          isSplitTest={isSplitTest}
-        />
-      )}
-
-      {/* ── Process Button ── */}
-      {hooks.length > 0 &&
-        bodies.length > 0 &&
-        ctas.length > 0 &&
-        project.status === "draft" && (
-          <ProcessButton projectId={projectId} onProcess={load} />
-        )}
-
-      {/* ── Variant Detail Panel ── */}
-      {selectedVariantId && (() => {
-        const selectedVariant = variants.find((v) => v.id === selectedVariantId);
-        if (!selectedVariant) return null;
-        return (
-          <VariantDetailPanel
-            variant={selectedVariant}
-            segments={segments}
-            projectId={projectId}
-            onClose={() => setSelectedVariantId(null)}
-          />
-        );
-      })()}
-    </div>
+    <LayoutSwitcher
+      project={project}
+      segments={segments}
+      variants={variants}
+      analytics={analytics}
+      projectId={projectId}
+      hooks={hooks}
+      bodies={bodies}
+      ctas={ctas}
+      renderedVariants={renderedVariants}
+      activeVariants={activeVariants}
+      failedSegments={failedSegments}
+      failedVariants={failedVariants}
+      isSplitTest={isSplitTest}
+      hasFailures={hasFailures}
+      bestSegmentIds={bestSegmentIds}
+      selectedVariantId={selectedVariantId}
+      onRefresh={load}
+      onSelectVariant={setSelectedVariantId}
+    />
   );
 }
 
